@@ -1,0 +1,924 @@
+---
+title: "Ecuador varcode paper: bayesian PTS"
+author: "Shazia Ruybal-Pesantez"
+output: 
+  html_notebook:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: cosmo
+---
+
+```{r global_options, include = FALSE}
+knitr::opts_chunk$set(fig.path = "viz/", fig.width = 12, fig.height = 8, echo = TRUE, warning = FALSE, message = FALSE, tidy = TRUE)
+```
+
+```{r setup, echo = F}
+library(tidyverse)
+library(tidygraph)
+library(ggraph)
+library(janitor)
+library(patchwork)
+library(kableExtra)
+library(cowplot)
+```
+
+## Background
+The purpose of this analysis was to calculate pairwise bayesian pairwise type sharing ($BP_{TS}$, Johnson et al *in prep* and inspired by BRO from [Larremore 2019](https://doi.org/10.1371/journal.pcbi.1006898)), to account for uncertainty in pairwise comparisons when calculating $P_{TS}$ as per [Barry et al 2007](https://doi.org/10.1371/journal.ppat.0030034) and [He et al 2018](https://doi.org/10.1038/s41467-018-04219-3). In our analysis, we calculate PTS "directionally" to account for variability in sampling across isolates, such that $n_{a}$/$n_{a}$ (comparing a to b) can differ from $n_{a}$/$n_{b}$ (comparing b to a) - as a simple example: if $n_{a}$=30, $n_{b}$=40, $n_{a}$=10, $P_{TS}$ would be 0.33 and 0.25 depending on the comparison. 
+
+$BP_{TS}$ provides an unbiased estimate of repertoire overlap (i.e. the number of *var* types shared by a given pair of isolates) by accounting for the uncertainty of those estimates due to sample size (i.e. repertoire size).
+
+### Import bayesian results
+These results have been provided by Erik Johnson and Dan Larremore, collaborators at University of Colorado. 
+
+For each (na,nb,nab) triplet, the posterior samples are triplets (s, Ra, Rb) where s is the number of shared genes (i.e., repertoire overlap), and Ra and Rb are the total repertoire sizes for parasite a and b. The results file contains the following variables:
+
+* `s_mean`: the mean of the s values
+* `s_lower_95hpdi`: the lower cutoff value for the 95% highest posterior density region for s (which is a version of the posterior credible interval that is centered on the highest density part of the posterior, which is different from the "equal tail" intervals that we provided before)
+* `s_upper_95hpdi`: the upper cutoff value for the 95% highest posterior density region for s
+* `xb_mean`: the mean of the xb=s/Rb values
+* `xb_lower_95hpdi`: the lower cutoff value for the 95% highest posterior density interval for xb=s/Rb
+* `xb_upper_95hpdi`: the upper cutoff value for the 95% highest posterior density interval for xb=s/Rb
+* `xa_mean`: the mean of the xa=s/Ra values
+* `xa_lower_95hpdi`: the lower cutoff value for the 95% highest posterior density interval for xa=s/Ra
+* `xa_upper_95hpdi`: the upper cutoff value for the 95% highest posterior density interval for xa=s/Ra
+* `x_mean`: the mean of the x=2s/(Ra+Rb) values
+* `x_lower_95hpdi`: the lower cutoff value for the 95% highest posterior density interval for x=2s/(Ra+Rb)
+* `x_upper_95hpdi`: the upper cutoff value for the 95% highest posterior density interval for x=2s/(Ra+Rb)
+
+```{r}
+bayesian_orig <- read.csv("data/ecuador_bayesian_results_v2_june10.csv") 
+```
+
+## Analysis
+For the Ecuador *var*code paper, we only considered one "direction" of the pairwise comparisons (i.e., "retrospective" comparisons, since we corrected for time order as a conservative approach to look at repertoire overlap/genetic relatedness). By focusing on "retrospective" $P_{TS}$ estimates we essentially compare each isolate to everything that was identified before it. For comparative analyses with the bayesian PTS, we will only focus on the `xa` results, which correspond to `s`/`Ra`, where `s` equals the mean of the `s` values, and `Ra` equals the repertoire size of the parasite identified later in time for a given pairwise comparison. 
+
+#### Differences between observed and estimated `s_mean` (i.e mean of the number of shared types)
+```{r}
+bayesian_orig %>% 
+  mutate(diff = n_shared_ab - s_mean) %>% summarise(min = min(diff),
+                                                  med = median(diff),
+                                                  mean = mean(diff),
+                                                  max = max(diff))
+
+bayesian_orig %>% 
+  mutate(diff = n_shared_ab - s_mean) %>% 
+  ggplot(aes(y = diff)) +
+    geom_histogram() +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    theme_bw()
+```
+
+#### Merge with epi data
+```{r}
+epi_mod1 <- ecu_epi %>% rename_at(names(.), function(x) paste0(x, "1"))
+epi_mod2 <- ecu_epi %>% rename_at(names(.), function(x) paste0(x, "2"))
+epi_formerge <- bind_cols(epi_mod1, epi_mod2)
+
+bayesian_data <- bayesian_orig %>% inner_join(select(epi_formerge, ends_with("1")), by = c("case_a" = "Case1"))
+bayesian_data <- bayesian_data %>% inner_join(select(epi_formerge, ends_with("2")), by = c("case_b" = "Case2"))
+```
+
+#### Create *var*code comparison variable
+```{r}
+bayesian_data <- bayesian_data %>% 
+  mutate(comparison = 
+           case_when(
+             varcode1 == "varcode1" & varcode2 == "varcode1" ~ "varcode1 vs varcode1", #vc1
+             varcode1 == "varcode2" & varcode2 == "varcode2" ~ "varcode2 vs varcode2", #vc2
+             varcode1 == "varcode3" & varcode2 == "varcode3" ~ "varcode3 vs varcode3", #vc3
+             varcode1 == "varcode4" & varcode2 == "varcode4" ~ "varcode4 vs varcode4", #vc4
+             varcode1 == "varcode5" & varcode2 == "varcode5" ~ "varcode5 vs varcode5", #vc5
+             varcode1 == "varcode6" & varcode2 == "varcode6" ~ "varcode6 vs varcode6", #vc6
+             varcode1 == "varcode7" & varcode2 == "varcode7" ~ "varcode7 vs varcode7", #vc7
+             varcode1 == "varcode8" & varcode2 == "varcode8" ~ "varcode8 vs varcode8", #vc8
+             varcode1 == "varcode9" & varcode2 == "varcode9" ~ "varcode9 vs varcode9", #vc9
+             varcode1 == "varcode1" & varcode2 == "varcode2" | varcode1 == "varcode2" & varcode2 == "varcode1" ~ "varcode1 vs varcode2", #1v2
+             varcode1 == "varcode1" & varcode2 == "varcode3" | varcode1 == "varcode3" & varcode2 == "varcode1" ~ "varcode1 vs varcode3", #1v3
+             varcode1 == "varcode1" & varcode2 == "varcode4" | varcode1 == "varcode4" & varcode2 == "varcode1" ~ "varcode1 vs varcode4", #1v4
+             varcode1 == "varcode1" & varcode2 == "varcode5" | varcode1 == "varcode5" & varcode2 == "varcode1" ~ "varcode1 vs varcode5", #1v5
+             varcode1 == "varcode1" & varcode2 == "varcode6" | varcode1 == "varcode6" & varcode2 == "varcode1" ~ "varcode1 vs varcode6", #1v6
+             varcode1 == "varcode1" & varcode2 == "varcode7" | varcode1 == "varcode7" & varcode2 == "varcode1" ~ "varcode1 vs varcode7", #1v7
+             varcode1 == "varcode1" & varcode2 == "varcode8" | varcode1 == "varcode8" & varcode2 == "varcode1" ~ "varcode1 vs varcode8", #1v8
+             varcode1 == "varcode1" & varcode2 == "varcode9" | varcode1 == "varcode9" & varcode2 == "varcode1" ~ "varcode1 vs varcode9", #1v9
+             varcode1 == "varcode2" & varcode2 == "varcode3" | varcode1 == "varcode3" & varcode2 == "varcode2" ~ "varcode2 vs varcode3", #2v3
+             varcode1 == "varcode2" & varcode2 == "varcode4" | varcode1 == "varcode4" & varcode2 == "varcode2" ~ "varcode2 vs varcode4", #2v4
+             varcode1 == "varcode2" & varcode2 == "varcode5" | varcode1 == "varcode5" & varcode2 == "varcode2" ~ "varcode2 vs varcode5", #2v5
+             varcode1 == "varcode2" & varcode2 == "varcode6" | varcode1 == "varcode6" & varcode2 == "varcode2" ~ "varcode2 vs varcode6", #2v6
+             varcode1 == "varcode2" & varcode2 == "varcode7" | varcode1 == "varcode7" & varcode2 == "varcode2" ~ "varcode2 vs varcode7", #2v7
+             varcode1 == "varcode2" & varcode2 == "varcode8" | varcode1 == "varcode8" & varcode2 == "varcode2" ~ "varcode2 vs varcode8", #2v8
+             varcode1 == "varcode2" & varcode2 == "varcode9" | varcode1 == "varcode9" & varcode2 == "varcode2" ~ "varcode2 vs varcode9", #2v9
+             varcode1 == "varcode3" & varcode2 == "varcode4" | varcode1 == "varcode4" & varcode2 == "varcode3" ~ "varcode3 vs varcode4", #3v4
+             varcode1 == "varcode3" & varcode2 == "varcode5" | varcode1 == "varcode5" & varcode2 == "varcode3" ~ "varcode3 vs varcode5", #3v5
+             varcode1 == "varcode3" & varcode2 == "varcode6" | varcode1 == "varcode6" & varcode2 == "varcode3" ~ "varcode3 vs varcode6", #3v6
+             varcode1 == "varcode3" & varcode2 == "varcode7" | varcode1 == "varcode7" & varcode2 == "varcode3" ~ "varcode3 vs varcode7", #3v7
+             varcode1 == "varcode3" & varcode2 == "varcode8" | varcode1 == "varcode8" & varcode2 == "varcode3" ~ "varcode3 vs varcode8", #3v8
+             varcode1 == "varcode3" & varcode2 == "varcode9" | varcode1 == "varcode9" & varcode2 == "varcode3" ~ "varcode3 vs varcode9", #3v9
+             varcode1 == "varcode4" & varcode2 == "varcode5" | varcode1 == "varcode5" & varcode2 == "varcode4" ~ "varcode4 vs varcode5", #4v5
+             varcode1 == "varcode4" & varcode2 == "varcode6" | varcode1 == "varcode6" & varcode2 == "varcode4" ~ "varcode4 vs varcode6", #4v6
+             varcode1 == "varcode4" & varcode2 == "varcode7" | varcode1 == "varcode7" & varcode2 == "varcode4" ~ "varcode4 vs varcode7", #4v7
+             varcode1 == "varcode4" & varcode2 == "varcode8" | varcode1 == "varcode8" & varcode2 == "varcode4" ~ "varcode4 vs varcode8", #4v8
+             varcode1 == "varcode4" & varcode2 == "varcode9" | varcode1 == "varcode9" & varcode2 == "varcode4" ~ "varcode4 vs varcode9", #4v9
+             varcode1 == "varcode5" & varcode2 == "varcode6" | varcode1 == "varcode6" & varcode2 == "varcode5" ~ "varcode5 vs varcode6", #5v6
+             varcode1 == "varcode5" & varcode2 == "varcode7" | varcode1 == "varcode7" & varcode2 == "varcode5" ~ "varcode5 vs varcode7", #5v7
+             varcode1 == "varcode5" & varcode2 == "varcode8" | varcode1 == "varcode8" & varcode2 == "varcode5" ~ "varcode5 vs varcode8", #5v8
+             varcode1 == "varcode5" & varcode2 == "varcode9" | varcode1 == "varcode9" & varcode2 == "varcode5" ~ "varcode5 vs varcode9", #5v9
+             varcode1 == "varcode6" & varcode2 == "varcode7" | varcode1 == "varcode7" & varcode2 == "varcode6" ~ "varcode6 vs varcode7", #6v7
+             varcode1 == "varcode6" & varcode2 == "varcode8" | varcode1 == "varcode8" & varcode2 == "varcode6" ~ "varcode6 vs varcode8", #6v8
+             varcode1 == "varcode6" & varcode2 == "varcode9" | varcode1 == "varcode9" & varcode2 == "varcode6" ~ "varcode6 vs varcode9", #6v9
+             varcode1 == "varcode7" & varcode2 == "varcode8" | varcode1 == "varcode8" & varcode2 == "varcode7" ~ "varcode7 vs varcode8", #7v8
+             varcode1 == "varcode7" & varcode2 == "varcode9" | varcode1 == "varcode9" & varcode2 == "varcode7" ~ "varcode7 vs varcode9", #7v9
+             varcode1 == "varcode8" & varcode2 == "varcode9" | varcode1 == "varcode9" & varcode2 == "varcode8" ~ "varcode8 vs varcode9")) #8v9 
+
+
+within_comp <- list("varcode1 vs varcode1", 
+                    "varcode2 vs varcode2",
+                    "varcode3 vs varcode3",
+                    "varcode4 vs varcode4", 
+                    "varcode5 vs varcode5",
+                    "varcode6 vs varcode6", 
+                    "varcode7 vs varcode7", 
+                    "varcode8 vs varcode8",
+                    "varcode9 vs varcode9")
+
+between_comp <- list("varcode1 vs varcode2", 
+                     "varcode1 vs varcode3", 
+                     "varcode1 vs varcode4", 
+                     "varcode1 vs varcode5", 
+                     "varcode1 vs varcode6", 
+                     "varcode1 vs varcode7", 
+                     "varcode1 vs varcode8", 
+                     "varcode1 vs varcode9", 
+                     "varcode2 vs varcode3", 
+                     "varcode2 vs varcode4", 
+                     "varcode2 vs varcode5", 
+                     "varcode2 vs varcode6", 
+                     "varcode2 vs varcode7", 
+                     "varcode2 vs varcode8", 
+                     "varcode2 vs varcode9", 
+                     "varcode3 vs varcode4", 
+                     "varcode3 vs varcode5", 
+                     "varcode3 vs varcode6", 
+                     "varcode3 vs varcode7", 
+                     "varcode3 vs varcode8", 
+                     "varcode3 vs varcode9", 
+                     "varcode4 vs varcode5", 
+                     "varcode4 vs varcode6", 
+                     "varcode4 vs varcode7", 
+                     "varcode4 vs varcode8", 
+                     "varcode4 vs varcode9", 
+                     "varcode5 vs varcode6", 
+                     "varcode5 vs varcode7", 
+                     "varcode5 vs varcode8", 
+                     "varcode5 vs varcode9", 
+                     "varcode6 vs varcode7", 
+                     "varcode6 vs varcode8", 
+                     "varcode6 vs varcode9", 
+                     "varcode7 vs varcode8", 
+                     "varcode7 vs varcode9",
+                     "varcode8 vs varcode9")
+```
+
+#### Merge with observed $P_{TS}$
+```{r}
+bayesian_data <- bayesian_data %>% left_join(GStable_ecu %>% select(SampleID1, SampleID2, GS_score), by = c("SampleID1", "SampleID2"))
+
+bayesian_data <- bayesian_data %>% mutate(ci_width = xa_upper_95hpdi - xa_lower_95hpdi)
+```
+
+## Credible interval width for the bayesian $P_{TS}$ 
+Calculating the width of credible interval can be used as a measure of uncertainty for each estimate, e.g. as described in [Larremore 2019](https://doi.org/10.1371/journal.pcbi.1006898). Here we calculate `ci_width` by substracting `xa_upper_95hpdi` - `xa_lower_95hpdi`. Then, by calculating the proportion of pairwise comparisons that are above a certain threshold/credible interval we are able to comment on the confidence in the definition of highly-related and/or putatively identical isolates as well as recombinant isolates that likely share a recent transmission history. 
+
+### All pairwise comparisons
+```{r}
+kable(bayesian_data %>% summarise(min = min(ci_width),
+                            med = median(ci_width),
+                            mean = mean(ci_width),
+                            max = max(ci_width)),
+      caption = "Summary statistics for credible interval width") %>% 
+  kable_styling(position = "left", full_width = F)
+
+bayesian_data %>%
+  ggplot(aes(y = ci_width)) + 
+  geom_histogram() +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    theme_bw()
+```
+
+Create credible interval width "bins" `ci_width_bin` 
+```{r}
+bayesian_data <- bayesian_data %>% mutate(ci_width_bin = cut(ci_width, breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7)))
+```
+
+### All pairwise comparisons (bins)
+```{r}
+kable(bayesian_data %>%
+  tabyl(ci_width_bin) %>% adorn_totals("row"),
+  caption = "The proportion of pairwise comparisons with each CI width bin") %>% 
+kable_styling(position = "left", bootstrap_options = c("striped", "hover")) %>% 
+  scroll_box(width = "100%", height = "400px")
+
+bayesian_data %>%
+  ggplot(aes(y = ci_width_bin)) + 
+    geom_histogram(stat = "count") +
+    theme_bw()
+```
+
+### Within *var*code {.tabset .tabset-pills}
+#### Summary stats all comparisons
+Out of the `r total_withinvc_comparisons` within-varcode pairwise comparisons, `r total_withinvc_uncertain` pairwise comparisons had a large credible interval width (0.2-0.4), indicating higher uncertainty in these estimates. `r total_withinvc_uncertain` (`r ceiling(bayesian_data %>% filter(comparison %in% within_comp) %>% filter(SampleID1 == "ECPf004" | SampleID2 == "ECPf004" | SampleID1 == "ECPf011" | SampleID2 == "ECPf011") %>%filter(ci_width_bin == "(0.2,0.3]" | ci_width_bin == "(0.3,0.4]") %>% nrow() / (total_withinvc_uncertain) *100)`%) of these more uncertain pairwise comparisons involved pairwise comparisons to the two *P. falciparum* isolates with the smallest repertoire sizes (11 and 19 types).
+```{r}
+kable(bayesian_data %>% filter(comparison %in% within_comp) %>%
+        summarise(min = min(ci_width),
+                  med = median(ci_width),
+                  mean = mean(ci_width),
+                  max = max(ci_width)),
+      caption = "Summary statistics for credible interval width:") %>% 
+  kable_styling(position = "left", bootstrap_options = c("striped", "hover")) %>% 
+  scroll_box(width = "100%")
+
+kable(bayesian_data %>%
+  filter(comparison %in% within_comp) %>% 
+  tabyl(ci_width_bin) %>% 
+  adorn_totals("row"),
+  caption = "The proportion of within-varcode pairwise comparisons with each CI width bin:") %>% 
+kable_styling(position = "left", bootstrap_options = c("striped", "hover")) %>% 
+  scroll_box(width = "100%", height = "400px")
+
+total_withinvc_comparisons <- bayesian_data %>% filter(comparison %in% within_comp) %>% nrow()
+```
+
+```{r}
+total_withinvc_uncertain <- bayesian_data %>% filter(comparison %in% within_comp) %>% filter(ci_width_bin == "(0.2,0.3]" | ci_width_bin == "(0.3,0.4]") %>% nrow()
+  
+bayesian_data %>%
+  filter(comparison %in% within_comp) %>% 
+  filter(ci_width_bin == "(0.2,0.3]") %>% 
+  filter(SampleID1 == "ECPf004" | SampleID2 == "ECPf004" | SampleID1 == "ECPf011" | SampleID2 == "ECPf011") %>% 
+  select(SampleID1, SampleID2, comparison, ci_width, ci_width_bin)
+
+32/32 #the number of uncertain pairwise comparisons involving ECPf004 or ECPf011
+
+bayesian_data %>%
+  filter(comparison %in% within_comp) %>% 
+  filter(ci_width_bin == "(0.3,0.4]") %>% 
+  filter(SampleID1 == "ECPf004" | SampleID2 == "ECPf004" | SampleID1 == "ECPf011" | SampleID2 == "ECPf011") %>% 
+  select(SampleID1, SampleID2, comparison, ci_width, ci_width_bin)
+
+4/4 #the number of uncertain pairwise comparisons involving ECPf004 or ECPf011
+```
+
+#### Summary stats by comparison
+```{r}
+kable(bayesian_data %>%
+  filter(comparison %in% within_comp) %>% 
+  select(SampleID1, SampleID2, comparison, ci_width, ci_width_bin) %>% 
+  tabyl(comparison, ci_width_bin) %>% 
+  adorn_totals("col") %>% 
+  adorn_percentages("row") %>% 
+  adorn_pct_formatting(digits = 1) %>% 
+  adorn_ns("front")) %>% 
+  kable_styling(position = "left", full_width = F, bootstrap_options = c("striped", "hover")) %>% 
+  scroll_box(width = "100%", height = "400px")
+```
+
+#### Counts
+```{r}
+bayesian_data %>%
+  filter(comparison %in% within_comp) %>% 
+  group_by(comparison, ci_width_bin) %>% 
+  tally() %>% 
+  ggplot(aes(x = n, y = comparison, fill = ci_width_bin)) + 
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("#2166ac", "#4393c3", "#d1e5f0", "#f4a582", "#ca0020")) +
+    theme_bw()
+
+within_varcode_ci_counts <- bayesian_data %>%
+  filter(comparison %in% within_comp) %>% 
+  group_by(comparison, ci_width_bin) %>% 
+  tally() %>% 
+  ggplot(aes(x = n, y = comparison, fill = ci_width_bin)) + 
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("#2166ac", "#4393c3", "#d1e5f0", "#f4a582", "#ca0020")) +
+    labs(x = "Number of pairwise comparisons",
+         y = "",
+         fill = "credible interval \nwidth bin") +
+    theme_bw()
+```
+
+#### Proportions
+```{r}
+bayesian_data %>%
+  filter(comparison %in% within_comp) %>% 
+  group_by(comparison, ci_width_bin) %>% 
+  tally() %>% 
+  ggplot(aes(x = n, y = comparison, fill = ci_width_bin)) + 
+    geom_bar(stat = "identity", position = "fill") +
+    scale_fill_manual(values = c("#2166ac", "#4393c3", "#d1e5f0", "#f4a582", "#ca0020")) +
+    labs(x = "proportion") +
+    theme_bw()
+
+within_varcode_ci_props <- bayesian_data %>%
+  filter(comparison %in% within_comp) %>% 
+  group_by(comparison, ci_width_bin) %>% 
+  tally() %>% 
+  ggplot(aes(x = n, y = comparison, fill = ci_width_bin)) + 
+    geom_bar(stat = "identity", position = "fill") +
+    scale_y_discrete(labels = c("varcode1 vs varcode1 \n(n=630)",
+                                "varcode2 vs varcode2 \n (n=3)",
+                                "varcode3 vs varcode3 \n (n=3)",
+                                "varcode6 vs varcode6 \n (n=3)",
+                                "varcode7 vs varcode7 \n (n=28)",
+                                "varcode8 vs varcode8 \n (n=1)")) +
+    scale_fill_manual(values = c("#2166ac", "#4393c3", "#d1e5f0", "#f4a582", "#ca0020")) +
+    labs(x = "Proportion of pairwise comparisons",
+         y = "",
+         fill = "Credible interval \nwidth bin") +
+    theme_bw()
+```
+
+### Between *var*code {.tabset .tabset-pills}
+#### Summary stats all comparisons
+Out of the `r total_betweenvc_comparisons` within-varcode pairwise comparisons, `r total_betweenvc_uncertain` pairwise comparisons had a large credible interval width (0.4-0.7), indicating higher uncertainty in these estimates. `r total_betweenvc_uncertain` (`r ceiling(bayesian_data %>% filter(comparison %in% between_comp) %>% filter(SampleID1 == "ECPf004" | SampleID2 == "ECPf004" | SampleID1 == "ECPf011" | SampleID2 == "ECPf011") %>% filter(ci_width_bin == "(0.4,0.5]" | ci_width_bin == "(0.5,0.6]" | ci_width_bin == "(0.6,0.7]") %>% nrow() / (total_betweenvc_uncertain) *100)`%) of these more uncertain pairwise comparisons involved pairwise comparisons to the two *P. falciparum* isolates with the smallest repertoire sizes (11 and 19 types).
+```{r}
+kable(bayesian_data %>% filter(comparison %in% between_comp) %>%
+        summarise(min = min(ci_width),
+                  med = median(ci_width),
+                  mean = mean(ci_width),
+                  max = max(ci_width)),
+      caption = "Summary statistics for credible interval width:") %>% 
+  kable_styling(position = "left")
+
+kable(bayesian_data %>%
+  filter(comparison %in% between_comp) %>% 
+  tabyl(ci_width_bin) %>% 
+  adorn_totals("row"),
+  caption = "The proportion of between-varcode pairwise comparisons with each CI width bin") %>% 
+kable_styling(position = "left", bootstrap_options = c("striped", "hover")) %>% 
+  scroll_box(width = "100%", height = "400px")
+
+total_betweenvc_comparisons <- bayesian_data %>% filter(comparison %in% between_comp) %>% nrow()
+```
+
+```{r}
+total_betweenvc_uncertain <- bayesian_data %>% filter(comparison %in% between_comp) %>% filter(ci_width_bin == "(0.4,0.5]" | ci_width_bin == "(0.5,0.6]" | ci_width_bin == "(0.6,0.7]") %>% nrow()
+
+bayesian_data %>%
+  filter(ci_width_bin == "(0.4,0.5]") %>% 
+  filter(SampleID1 == "ECPf004" | SampleID2 == "ECPf004" | SampleID1 == "ECPf011" | SampleID2 == "ECPf011") %>% 
+  select(SampleID1, SampleID2, comparison, ci_width, ci_width_bin)
+
+20/21
+
+bayesian_data %>%
+  filter(ci_width_bin == "(0.5,0.6]") %>% 
+  filter(SampleID1 == "ECPf004" | SampleID2 == "ECPf004" | SampleID1 == "ECPf011" | SampleID2 == "ECPf011") %>% 
+  select(SampleID1, SampleID2, comparison, ci_width, ci_width_bin)
+
+9/9
+
+bayesian_data %>%
+  filter(ci_width_bin == "(0.6,0.7]") %>% 
+  filter(SampleID1 == "ECPf004" | SampleID2 == "ECPf004" | SampleID1 == "ECPf011" | SampleID2 == "ECPf011") %>% 
+  select(SampleID1, SampleID2, comparison, ci_width, ci_width_bin)
+
+1/1
+
+bayesian_data %>% 
+  mutate(high_confidence = cut(ci_width, breaks = c(0, 0.2, 0.7))) %>% 
+  filter(comparison %in% between_comp) %>% 
+  tabyl(comparison, high_confidence) %>% 
+  adorn_totals("col") %>% 
+  adorn_percentages("row") %>% 
+  adorn_pct_formatting(digits = 1) %>% 
+  adorn_ns("front") 
+```
+
+#### Summary stats by comparison
+```{r}
+kable(bayesian_data %>%
+  filter(comparison %in% between_comp) %>% 
+  select(SampleID1, SampleID2, comparison, ci_width, ci_width_bin) %>% 
+  tabyl(comparison, ci_width_bin) %>% 
+  adorn_totals("col") %>% 
+  adorn_percentages("row") %>% 
+  adorn_pct_formatting(digits = 1) %>% 
+  adorn_ns("front")) %>% 
+  kable_styling(position = "left", full_width = F, bootstrap_options = c("striped", "hover")) %>% 
+  scroll_box(width = "100%", height = "400px")
+```
+
+#### Counts
+```{r}
+bayesian_data %>%
+  filter(comparison %in% between_comp) %>% 
+  group_by(comparison, ci_width_bin) %>% 
+  tally() %>% 
+  ggplot(aes(x = n, y = comparison, fill = ci_width_bin)) + 
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("#053061", "#2166ac", "#4393c3", "#d1e5f0", "#f4a582", "#ca0020", "#67001f")) +
+    theme_bw()
+
+between_varcode_ci_counts <- bayesian_data %>%
+  filter(comparison %in% between_comp) %>% 
+  group_by(comparison, ci_width_bin) %>% 
+  tally() %>% 
+  ggplot(aes(x = n, y = comparison, fill = ci_width_bin)) + 
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("#053061", "#2166ac", "#4393c3", "#d1e5f0", "#f4a582", "#ca0020", "#67001f")) +
+    labs(x = "Number of pairwise comparisons",
+         y = "",
+         fill = "Credible interval \nwidth bin") +
+    theme_bw()
+```
+
+#### Proportion
+```{r}
+bayesian_data %>%
+  filter(comparison %in% between_comp) %>% 
+  group_by(comparison, ci_width_bin) %>% 
+  tally() %>% 
+  ggplot(aes(x = n, y = comparison, fill = ci_width_bin)) + 
+    geom_bar(stat = "identity", position = "fill") +
+    scale_fill_manual(values = c("#053061", "#2166ac", "#4393c3", "#d1e5f0", "#f4a582", "#ca0020", "#67001f")) +
+    labs(x = "proportion") +
+    theme_bw()
+
+between_varcode_ci_props <- bayesian_data %>%
+  filter(comparison %in% between_comp) %>% 
+  group_by(comparison, ci_width_bin) %>% 
+  tally() %>% 
+  ggplot(aes(x = n, y = comparison, fill = ci_width_bin)) + 
+    geom_bar(stat = "identity", position = "fill") +
+    scale_fill_manual(values = c("#053061", "#2166ac", "#4393c3", "#d1e5f0", "#f4a582", "#ca0020", "#67001f")) +
+    labs(x = "Proportion of pairwise comparisons",
+         y = "",
+         fill = "Credible interval \nwidth bin") +
+    theme_bw()
+```
+
+## Differences between observed and estimated mean PTS
+```{r}
+bayesian_data %>% 
+  mutate(diff = GS_score - xa_mean) %>% summarise(min = min(diff),
+                                                  med = median(diff),
+                                                  mean = mean(diff),
+                                                  max = max(diff))
+
+bayesian_data %>% 
+  mutate(diff = GS_score - xa_mean) %>% 
+  ggplot(aes(y = diff)) +
+    geom_histogram() +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    theme_bw()
+```
+
+### Correlation between PTS and mean bayesian PTS (s/Ra)
+Because the more uncertain pairwise comparisons involved pairwise comparisons to the two *P. falciparum* isolates with the smallest repertoire sizes (11 and 19 types), will create a variable `outlier_isos` to quickly visualize how they affect the results.
+*note: circles in light red correspond to pairwise comparisons involving the isolates with the smallest repertoire sizes, many of which had higher uncertainty*
+```{r}
+bayesian_data <- bayesian_data %>% mutate(outlier_isos = case_when((SampleID1 == "ECPf004" | SampleID2 == "ECPf004" | SampleID1 == "ECPf011" | SampleID2 == "ECPf011") ~ "outlier isolates",
+                                                                   TRUE ~ "not outlier isolates"))
+
+bayesian_data %>% 
+    ggplot(aes(x = GS_score, y = xa_mean)) + 
+    geom_point(aes(group = outlier_isos), shape = 21, size = 2) +
+    scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    gghighlight::gghighlight(outlier_isos %in% "not outlier isolates") +
+    geom_smooth(method = "lm", se = T, formula = "y ~ x", color = "darkgrey") +
+    scale_y_continuous(breaks = seq(0, 1, by = 0.25)) + 
+    ylab(expression(paste("Bayesian P"["TS"], " score"))) +
+    xlab(expression(paste("P"["TS"], " score"))) + 
+    theme_minimal()
+
+corr_bayesian_observed <- bayesian_data %>% 
+    ggplot(aes(x = GS_score, y = xa_mean)) + 
+    geom_point(aes(color = outlier_isos), shape = 21, size = 2) +
+    scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_smooth(method = "lm", se = T, formula = "y ~ x", color = "darkgrey") +
+    scale_y_continuous(breaks = seq(0, 1, by = 0.25)) + 
+    ylab(expression(paste("Bayesian P"["TS"], " score"))) +
+    xlab(expression(paste("P"["TS"], " score"))) + 
+    theme_cowplot() +
+    background_grid(major = "xy")
+
+cor.test(bayesian_data$GS_score, bayesian_data$xa_mean, method = c("pearson"))
+
+save_plot("viz/correlation_PTSvBayesian.png", corr_bayesian_observed, base_width = 8, base_height = 6)
+```
+
+### Correlation between PTS and mean bayesian PTS (s/Ra) vs microsatellite PAS
+```{r}
+bayesian_data <- bayesian_data %>% left_join(PAStable_ecuMS, by = c("SampleID1", "SampleID2"))
+bayesian_data <- bayesian_data %>% rename_at("GS_score.x", ~"GS_score") %>% 
+                                   rename_at("GS_score.y", ~"PAS_score") 
+                                     
+corr_bayesian_microsat <- bayesian_data %>%
+   ggplot(aes(x = xa_mean, y = PAS_score)) + 
+      geom_jitter(shape = 21, color = "black", size = 2) +
+      geom_smooth(method = "lm", se = T, color = "darkgrey") +
+      scale_y_continuous(breaks = seq(0, 1, by = 0.25)) + 
+      theme_cowplot() +
+      ylab(expression(paste("P"["AS"], " score"))) +
+      xlab(expression(paste("Bayesian P"["TS"], " score"))) +
+      background_grid(major = "xy", minor = "none") 
+
+cor.test(bayesian_data$xa_mean, bayesian_data$PAS_score, method = c("pearson"))
+
+plot_supp_correlation <- correlation_plot + corr_bayesian_microsat + plot_annotation(tag_levels = "a") 
+save_plot("viz/supp_correlation_PTSvPASvBayesian.png", plot_supp_correlation, base_width = 12, base_height = 6)
+corr_bayesian_microsat
+```
+There were a total of `r bayesian_data %>% filter(PAS_score == 1 & xa_mean <= 0.50) %>% nrow()` (`r ceiling((bayesian_data %>% filter(PAS_score == 1 & xa_mean <= 0.50) %>% nrow())/(bayesian_data %>% filter(PAS_score == 1) %>% nrow())*100)`%) out of `r bayesian_data %>% filter(PAS_score == 1) %>% nrow()` pairwise comparisons where PAS=1 but bayesian PTS ≤0.50. 
+
+There were a total of `r bayesian_data %>% filter(PAS_score > 0.50 & xa_mean <= 0.50) %>% nrow()` (`r ceiling((bayesian_data %>% filter(PAS_score > 0.50 & xa_mean <= 0.50) %>% nrow())/(bayesian_data %>% filter(PAS_score > 0.50) %>% nrow())*100)`%) out of `r bayesian_data %>% filter(PAS_score > 0.50) %>% nrow()` pairwise comparisons where PAS>0.50 but bayesian PTS ≤0.50. 
+
+## Within-varcode bayesian PTS (s/Ra) {.tabset .tabset-pills}
+### PTS lower cut-off value 
+*note: circles in light red correspond to pairwise comparisons involving the isolates with the smallest repertoire sizes, many of which had higher uncertainty*
+```{r}
+bayesian_data %>% 
+  filter(comparison %in% within_comp) %>% 
+  ggplot(aes(x = xa_lower_95hpdi, y = comparison)) +
+    geom_jitter(aes(color = outlier_isos), shape = 21, size = 2) +
+  scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_boxplot(fill = "grey", alpha = 0.5, outlier.shape = NA) +
+    theme_bw()
+```
+
+### mean PTS 
+*note: circles in light red correspond to pairwise comparisons involving the isolates with the smallest repertoire sizes, many of which had higher uncertainty*
+```{r}
+bayesian_data %>% 
+  filter(comparison %in% within_comp) %>% 
+  ggplot(aes(x = xa_mean, y = comparison)) +
+    geom_jitter(aes(color = outlier_isos), shape = 21, size = 2) +
+  scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_boxplot(fill = "grey", alpha = 0.5, outlier.shape = NA) +
+    theme_bw() 
+```
+
+### PTS upper cut-off value 
+*note: circles in light red correspond to pairwise comparisons involving the isolates with the smallest repertoire sizes, many of which had higher uncertainty*
+```{r}
+bayesian_data %>% 
+  filter(comparison %in% within_comp) %>% 
+  ggplot(aes(x = xa_upper_95hpdi, y = comparison)) +
+    geom_jitter(aes(color = outlier_isos), shape = 21, size = 2, width = -0.5) +
+    scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_boxplot(fill = "grey", alpha = 0.5, outlier.shape = NA) +
+    theme_bw() 
+```
+
+## Between-varcode bayesian PTS (s/Ra) {.tabset .tabset-pills}
+### PTS lower-cutoff
+*note: circles in light red correspond to pairwise comparisons involving the isolates with the smallest repertoire sizes, many of which had higher uncertainty*
+```{r fig.height=4}
+bayesian_data %>% 
+  filter(comparison %in% between_comp) %>% 
+  ggplot(aes(x = xa_lower_95hpdi, y = comparison)) +
+    geom_jitter(aes(color = outlier_isos), shape = 21, size = 2, width = -0.5) +
+    scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_boxplot(fill = "grey", alpha = 0.5, outlier.shape = NA) +
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = "darkgrey") +
+    theme_bw() 
+```
+
+### mean PTS
+*note: circles in light red correspond to pairwise comparisons involving the isolates with the smallest repertoire sizes, many of which had higher uncertainty*
+```{r fig.height=4}
+bayesian_data %>% 
+  filter(comparison %in% between_comp) %>% 
+  ggplot(aes(x = xa_mean, y = comparison)) +
+    geom_jitter(aes(color = outlier_isos), shape = 21, size = 2, width = -0.5) +
+    scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_boxplot(fill = "grey", alpha = 0.5, outlier.shape = NA) +
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = "darkgrey") +
+    theme_bw() 
+```
+
+### PTS upper cut-off
+*note: circles in light red correspond to pairwise comparisons involving the isolates with the smallest repertoire sizes, many of which had higher uncertainty*
+```{r fig.height=4}
+bayesian_data %>% 
+  filter(comparison %in% between_comp) %>% 
+  ggplot(aes(x = xa_upper_95hpdi, y = comparison)) +
+    geom_jitter(aes(color = outlier_isos), shape = 21, size = 2, width = -0.5) +
+    scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_boxplot(fill = "grey", alpha = 0.5, outlier.shape = NA) +
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = "darkgrey") +
+    geom_vline(xintercept = 0.9, linetype = "dashed", color = "darkgrey") +
+    theme_bw() 
+```
+
+## Observed PTS {.tabset .tabset-pills}
+### Within-varcode observed PTS
+```{r}
+bayesian_data %>% 
+  filter(comparison %in% within_comp) %>% 
+  ggplot(aes(x = GS_score, y = comparison)) +
+    geom_jitter(aes(color = outlier_isos), shape = 21, size = 2, width = -0.5) +
+    scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_boxplot(fill = "grey", alpha = 0.5, outlier.shape = NA) +
+    theme_bw() 
+```
+
+### Between-varcode observed PTS
+```{r fig.height=4}
+bayesian_data %>% 
+  filter(comparison %in% between_comp) %>% 
+  ggplot(aes(x = GS_score, y = comparison)) +
+    geom_jitter(aes(color = outlier_isos), shape = 21, size = 2, width = -0.5) +
+    scale_color_manual(values = c("black", "#ef8a62"),
+                       name = "") +
+    geom_boxplot(fill = "grey", alpha = 0.5, outlier.shape = NA) +
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = "darkgrey") +
+    theme_bw() 
+```
+
+## Networks bayesian mean PTS i.e. s/Ra {.tabset .tabset-pills}
+### s/Ra ≥0.90
+```{r}
+bayesian_edges <- bayesian_data %>% select(id1, id2, xa_mean)
+bayesian_tidy <- tbl_graph(nodes = ecu_epi, edges = bayesian_edges, directed = T)
+
+# varcode_list <- ecu_epi %>% select(SampleID, varcode)
+# varcode_list$SampleID <- as.factor(varcode_list$SampleID)
+# varcode_list$varcode <- as.factor(varcode_list$varcode)
+# varcode_list <- varcode_list %>% column_to_rownames("SampleID")
+# varcode_colors <- list(varcode = c("varcode1" = "#fb9a99", "varcode2" = "#e538a9","varcode3" = "#48B24F", "varcode4" = "#30d5c8", "varcode5" = "#E4B031", "varcode6" = "#3090d5", "varcode7" = "#CAD93F", "varcode8" = "#9ac4b3", "varcode9" = "#a880bb"))
+
+bayesian_tidy %>% activate(edges) %>% filter(xa_mean >= 0.90) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID",
+       fill = "") +
+  scale_fill_manual(values = varcode_colors$varcode, labels = c("varcode1 (N=36)", "varcode2 (N=3)", "varcode3 (N=3)", "varcode4 (N=1)", "varcode5 (N=1)", "varcode6 (N=3)", "varcode7 (N=8)", "varcode8 (N=2)", "varcode9 (N=1)")) +
+  labs(title = "s/Ra ≥ 0.90") +
+  theme_graph()
+
+varcodes_bayesian_network <- bayesian_tidy %>% activate(edges) %>% filter(xa_mean >= 0.90) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID",
+       fill = "") +
+  scale_fill_manual(values = varcode_colors$varcode, labels = c("varcode1 (N=36)", "varcode2 (N=3)", "varcode3 (N=3)", "varcode4 (N=1)", "varcode5 (N=1)", "varcode6 (N=3)", "varcode7 (N=8)", "varcode8 (N=2)", "varcode9 (N=1)")) +
+  #labs(title = "s/Ra ≥ 0.90") +
+  theme_graph()
+
+save_plot("viz/varcode_bayesian_network.png", varcodes_bayesian_network, base_width = 8, base_height = 6)
+```
+
+### s/Ra ≥0.50
+```{r}
+bayesian_tidy %>% activate(edges) %>% filter(xa_mean >= 0.50) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID",
+       fill = "") +
+  scale_fill_manual(values = varcode_colors$varcode, labels = c("varcode1 (N=36)", "varcode2 (N=3)", "varcode3 (N=3)", "varcode4 (N=1)", "varcode5 (N=1)", "varcode6 (N=3)", "varcode7 (N=8)", "varcode8 (N=2)", "varcode9 (N=1)")) +
+  labs(title = "s/Ra ≥ 0.50") +
+  theme_graph()
+
+recombinants_bayesian_network <- bayesian_tidy %>% activate(edges) %>% filter(xa_mean >= 0.50) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID",
+       fill = "") +
+  scale_fill_manual(values = varcode_colors$varcode, labels = c("varcode1 (N=36)", "varcode2 (N=3)", "varcode3 (N=3)", "varcode4 (N=1)", "varcode5 (N=1)", "varcode6 (N=3)", "varcode7 (N=8)", "varcode8 (N=2)", "varcode9 (N=1)")) +
+  #labs(title = "s/Ra ≥ 0.50") +
+  theme_graph()
+
+save_plot("viz/recombinants_bayesian_network.png", recombinants_bayesian_network, base_width = 8, base_height = 6)
+```
+
+## High-confidence pairwise comparisons
+For our networks at PTS or BPTS ≥0.50, we calculate the proportion of pairwise comparisons that are high-confidence. For recombinants (PTS or BPTS ≥0.50), we calculate the proportion of pairwise comparisons where the *lower* bound of the 95% HDPI is confidently *above* the threshold of ≥0.50 (we found `r round(highconf_recomb_pw_comp/total_recomb_pw_comp, 3)*100`%, N=`r highconf_recomb_pw_comp`/`r total_recomb_pw_comp`). For genetically-distinct *var*codes (PTS or BPTS ≤0.50), we calculate the proportion of pairwise comparisons where the *upper* bound of the 95% HDPI is confidently *below* the threshold of ≤0.50 (we found `r round(highconf_distinct_pw_comp/total_distinct_pw_comp,3)*100`%, N=`r highconf_distinct_pw_comp`/`r total_distinct_pw_comp`). 
+```{r}
+#total recombinant pw comparisons
+total_recomb_pw_comp <- bayesian_data %>% 
+  filter(comparison %in% between_comp) %>% 
+  filter(comparison == "varcode1 vs varcode3" | 
+           comparison == "varcode1 vs varcode4" | 
+           comparison == "varcode1 vs varcode6" |
+           comparison == "varcode1 vs varcode7" |
+           comparison == "varcode3 vs varcode4" |
+           comparison == "varcode3 vs varcode6" |
+           comparison == "varcode3 vs varcode7" |
+           comparison == "varcode4 vs varcode6" |
+           comparison == "varcode4 vs varcode7" |
+           comparison == "varcode6 vs varcode7") %>% nrow()
+highconf_recomb_pw_comp <- bayesian_data %>% 
+  filter(comparison %in% between_comp) %>% 
+  filter(comparison == "varcode1 vs varcode3" | 
+           comparison == "varcode1 vs varcode4" | 
+           comparison == "varcode1 vs varcode6" |
+           comparison == "varcode1 vs varcode7" |
+           comparison == "varcode3 vs varcode4" |
+           comparison == "varcode3 vs varcode6" |
+           comparison == "varcode3 vs varcode7" |
+           comparison == "varcode4 vs varcode6" |
+           comparison == "varcode4 vs varcode7" |
+           comparison == "varcode6 vs varcode7") %>% 
+  filter(xa_lower_95hpdi >= 0.50) %>% 
+  nrow()
+
+highconf_recomb_pw_comp/total_recomb_pw_comp
+
+total_distinct_pw_comp <- bayesian_data %>% #posterior mean
+  filter(comparison %in% between_comp) %>% 
+  filter(comparison != "varcode1 vs varcode3", 
+         comparison != "varcode1 vs varcode4", 
+         comparison != "varcode1 vs varcode6",
+         comparison != "varcode1 vs varcode7", 
+         comparison != "varcode3 vs varcode4",
+         comparison != "varcode3 vs varcode6", 
+         comparison != "varcode3 vs varcode7",
+         comparison != "varcode4 vs varcode6",
+         comparison != "varcode4 vs varcode7",
+         comparison != "varcode6 vs varcode7") %>% nrow()
+
+highconf_distinct_pw_comp <- bayesian_data %>% #posterior mean
+  filter(comparison %in% between_comp) %>% 
+  filter(comparison != "varcode1 vs varcode3", 
+         comparison != "varcode1 vs varcode4", 
+         comparison != "varcode1 vs varcode6",
+         comparison != "varcode1 vs varcode7", 
+         comparison != "varcode3 vs varcode4",
+         comparison != "varcode3 vs varcode6", 
+         comparison != "varcode3 vs varcode7",
+         comparison != "varcode4 vs varcode6",
+         comparison != "varcode4 vs varcode7",
+         comparison != "varcode6 vs varcode7") %>% 
+  filter(xa_upper_95hpdi <= 0.50) %>% nrow()
+
+highconf_distinct_pw_comp/total_distinct_pw_comp
+```
+
+
+## Figures for paper
+```{r, fig.width=10, fig.height=10}
+plot_supp_within_varcode <- varcodes_bayesian_network / within_varcode_ci_props + plot_layout(guides = "collect") + plot_annotation(tag_levels = "a") 
+
+save_plot("viz/supp_varcode_bayesian.png", plot_supp_within_varcode, base_width = 12, base_height = 8)
+
+
+plot_supp_between_varcode <- recombinants_bayesian_network / (between_varcode_ci_counts | between_varcode_ci_props ) + plot_layout(guides = "collect") + plot_annotation(tag_levels = "a") 
+
+save_plot("viz/supp_recombinants_bayesian.png", plot_supp_between_varcode, base_width = 10, base_height = 10)
+
+plot_supp_within_varcode
+plot_supp_between_varcode
+```
+
+```{r, fig.width = 12, fig.height=12}
+plot_supp_all_boxplots <- (bayesian_data %>% #observed
+  filter(comparison %in% within_comp) %>% 
+  ggplot(aes(x = GS_score, y = comparison)) +
+  geom_jitter(aes(color = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  gghighlight::gghighlight(outlier_isos %in% "not outlier isolates") +
+  scale_color_manual(values = c("black", "#ef8a62"),
+                     name = "") +
+  geom_boxplot(fill = "royalblue", alpha = 0.5, outlier.shape = NA) +
+  geom_vline(xintercept = 0.9, linetype = "dashed", color = "#838383") +
+  labs(y = "",
+       title = expression(paste(italic("var"), "codes"))) +
+  xlab(expression(paste("observed P"["TS"]))) + 
+  xlim(c(0.25, 1)) +
+  theme_bw()) +
+  
+(bayesian_data %>% #posterior mean
+  filter(comparison %in% within_comp) %>% 
+  ggplot(aes(y = comparison)) +
+  geom_jitter(aes(x = xa_lower_95hpdi, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  #geom_jitter(aes(x = xa_mean, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  geom_jitter(aes(x = xa_upper_95hpdi, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  gghighlight::gghighlight(outlier_isos %in% "not outlier isolates") +
+  scale_color_manual(values = c("black", "#ef8a62"),
+                     name = "") +
+  geom_boxplot(aes(x = xa_mean, y = comparison), fill = "royalblue", alpha = 0.5, outlier.shape = NA) +
+  geom_vline(xintercept = 0.9, linetype = "dashed", color = "#838383") +
+  labs(y = "",
+       title = expression(paste(italic("var"), "codes"))) +
+  xlab(expression(paste("Bayesian P"["TS"]))) + 
+  xlim(c(0.25, 1)) +
+  theme_bw()) +
+  
+(bayesian_data %>% #posterior mean
+  filter(comparison %in% between_comp) %>% 
+  filter(comparison == "varcode1 vs varcode3" | 
+         comparison == "varcode1 vs varcode4" | 
+         comparison == "varcode1 vs varcode6" |
+         comparison == "varcode1 vs varcode7" |
+         comparison == "varcode3 vs varcode4" |
+         comparison == "varcode3 vs varcode6" |
+         comparison == "varcode3 vs varcode7" |
+         comparison == "varcode4 vs varcode6" |
+         comparison == "varcode4 vs varcode7" |
+         comparison == "varcode6 vs varcode7") %>% 
+  ggplot(aes(y = comparison)) +
+  geom_point(aes(x = GS_score, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  gghighlight::gghighlight(outlier_isos %in% "not outlier isolates") +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "#838383") +
+  geom_boxplot(aes(x = xa_mean, y = comparison), fill = "royalblue", alpha = 0.5, outlier.shape = NA) +
+  labs(y = "",
+       title = expression(paste("recombinant/genetically-related ", italic("var"), "codes"))) +
+  xlab(expression(paste("observed P"["TS"]))) + 
+  xlim(c(0, 1)) +
+  theme_bw()) + 
+  
+(bayesian_data %>% #posterior mean
+  filter(comparison %in% between_comp) %>% 
+  filter(comparison == "varcode1 vs varcode3" | 
+         comparison == "varcode1 vs varcode4" | 
+         comparison == "varcode1 vs varcode6" |
+         comparison == "varcode1 vs varcode7" |
+         comparison == "varcode3 vs varcode4" |
+         comparison == "varcode3 vs varcode6" |
+         comparison == "varcode3 vs varcode7" |
+         comparison == "varcode4 vs varcode6" |
+         comparison == "varcode4 vs varcode7" |
+         comparison == "varcode6 vs varcode7") %>% 
+  ggplot(aes(y = comparison)) +
+  geom_point(aes(x = xa_lower_95hpdi, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  geom_point(aes(x = xa_upper_95hpdi, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  gghighlight::gghighlight(outlier_isos %in% "not outlier isolates") +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "#838383") +
+  geom_boxplot(aes(x = xa_mean, y = comparison), fill = "royalblue", alpha = 0.5, outlier.shape = NA) +
+  labs(y = "",
+       title = expression(paste("recombinant/genetically-related ", italic("var"), "codes"))) +
+  xlab(expression(paste("Bayesian P"["TS"]))) + 
+  xlim(c(0, 1)) +
+  theme_bw()) +
+  
+(bayesian_data %>% #posterior mean
+  filter(comparison %in% between_comp) %>% 
+  filter(comparison != "varcode1 vs varcode3", 
+         comparison != "varcode1 vs varcode4", 
+         comparison != "varcode1 vs varcode6",
+         comparison != "varcode1 vs varcode7", 
+         comparison != "varcode3 vs varcode4",
+         comparison != "varcode3 vs varcode6", 
+         comparison != "varcode3 vs varcode7",
+         comparison != "varcode4 vs varcode6",
+         comparison != "varcode4 vs varcode7",
+         comparison != "varcode6 vs varcode7") %>% 
+  ggplot(aes(y = comparison)) +
+  geom_point(aes(x = GS_score, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  gghighlight::gghighlight(outlier_isos %in% "not outlier isolates") +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "#838383") +
+  geom_boxplot(aes(x = xa_mean, y = comparison), fill = "royalblue", alpha = 0.5, outlier.shape = NA) +
+  labs(y = "",
+       title = expression(paste("genetically distinct ", italic("var"), "codes"))) +
+  xlab(expression(paste("observed P"["TS"]))) + 
+  xlim(c(0, 1)) +
+  theme_bw()) +
+
+(bayesian_data %>% #posterior mean
+  filter(comparison %in% between_comp) %>% 
+  filter(comparison != "varcode1 vs varcode3", 
+         comparison != "varcode1 vs varcode4", 
+         comparison != "varcode1 vs varcode6",
+         comparison != "varcode1 vs varcode7", 
+         comparison != "varcode3 vs varcode4",
+         comparison != "varcode3 vs varcode6", 
+         comparison != "varcode3 vs varcode7",
+         comparison != "varcode4 vs varcode6",
+         comparison != "varcode4 vs varcode7",
+         comparison != "varcode6 vs varcode7") %>% 
+  ggplot(aes(y = comparison)) +
+  geom_point(aes(x = xa_lower_95hpdi, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  geom_point(aes(x = xa_upper_95hpdi, y = comparison, group = outlier_isos), shape = 21, size = 2, width = -0.5) +
+  gghighlight::gghighlight(outlier_isos %in% "not outlier isolates") +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "#838383") +
+  geom_boxplot(aes(x = xa_mean, y = comparison), fill = "royalblue", alpha = 0.5, outlier.shape = NA) +
+  labs(y = "",
+       title = expression(paste("genetically distinct ", italic("var"), "codes"))) +
+  xlab(expression(paste("Bayesian P"["TS"]))) + 
+  xlim(c(0, 1)) +
+  theme_bw()) +
+  
+plot_layout(guides = "collect", ncol = 2, heights = c(1, 1.5, 2)) + plot_annotation(tag_levels = "a") 
+
+save_plot("viz/supp_boxplots_PTSvBTS.png", plot_supp_all_boxplots, base_width = 12, base_height = 10)
+
+plot_supp_all_boxplots
+```
+

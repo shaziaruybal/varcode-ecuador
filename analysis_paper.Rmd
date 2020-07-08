@@ -1,0 +1,1479 @@
+---
+title: "Ecuador varcode paper analysis"
+author: "Shazia Ruybal-Pesantez"
+output: 
+  html_notebook:
+    toc: true
+    toc_float: true
+    code_folding: hide 
+    fig_width: 6
+    fig_height: 4
+    theme: cosmo
+---
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.path = "viz/", fig.width = 12, fig.height = 8, echo = TRUE, warning = FALSE, message = FALSE, tidy = TRUE)
+```
+
+### Libraries and functions
+Load the libraries we will need for the analysis.
+```{r setup, echo = F}
+library(data.table)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(arsenal)
+library(pheatmap)
+library(ggplot2)
+library(RColorBrewer)
+library(vegan)
+library(cowplot)
+library(reshape)
+library(ggpubr)
+library(epiR)
+library(tibble)
+library(purrr)
+library(colortools)
+library(Matrix)
+library(ggnewscale)
+#library(RVAideMemoire) ##not working
+library(igraph)
+library(tidygraph)
+library(ggraph)
+library(ggmap)
+library(ape)
+library(rcompanion)
+library(gganimate)
+library(gifski)
+library(eulerr)
+library(Rtsne)
+#BiocManager::install("ggtree")
+library(ggtree)
+library(ggsn)
+library(maps)
+library(mapdata)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(rgeos)
+library(ggspatial)
+library(cowplot)
+library(Cairo)
+library(svglite)
+library(kableExtra)
+library(patchwork)
+library(janitor)
+library(lubridate)
+library(scatterpie)
+```
+
+Load our functions.
+```{r functions}
+#This function calculates PTS or PAS in the case of microsatellites.
+pairwiseType <- function(x){
+    x <- t(x)
+    mm <- as(x, "dgCMatrix")
+    d <- tcrossprod(mm)
+    denom <- matrix(rep(rowSums(x), ncol(d)), ncol = ncol(d), byrow = FALSE)
+    denom <- denom + t(denom)
+    return(as.matrix(2*d/denom))
+}
+
+#This function calculates Sij and Sji (i.e., directional PTS) as in He et al 2018.
+geneticSimilarity <- function(mat){
+  newmat <- tcrossprod(mat > 0)
+  newmat <- newmat/rowSums(mat > 0)
+  return(newmat)  
+}
+
+#This function saves the PTS matrix values into a table for analysis purposes.
+PTSmatrixToTable <- function(x){
+  diag(x) <- NA
+  x[upper.tri(x)] <- NA
+
+  df <- data.frame(SampleID1 = rownames(x)[row(x)], SampleID2 = colnames(x)[col(x)], PTS_score = c(x))
+  df <- na.omit(df)
+  return(df)
+}
+
+#This function saves the Genetic Similarity matrix values into a table for analysis purposes. Note that there are two GS scores for every isolate pair (i.e. directional PTS)
+GSmatrixToTable <- function(x){
+  diag(x) <- NA
+
+  df <- data.frame(SampleID1 = rownames(x)[row(x)], SampleID2 = colnames(x)[col(x)], GS_score = c(x))
+  df <- na.omit(df)
+  return(df)
+}
+
+#This function saves the Genetic Similarity matrix values into a table for analysis purposes. Note that for the varcode analysis we only include retrospective PTS and we want to include the diagonal for the *var*code comparisons (i.e. the 1).
+GSmatrixToTable_VC <- function(x){
+  x[upper.tri(x)] <- NA
+  df <- data.frame(SampleID1 = rownames(x)[row(x)], SampleID2 = colnames(x)[col(x)], GS_score = c(x))
+  df <- na.omit(df)
+  return(df)
+}
+```
+
+### Load data
+```{r}
+ups <- fread("data/ecuador_ups_classification_final.csv", data.table = F, )
+binary_all <- fread("data/ecuador_SAm_binary_matrix_final.csv", data.table = F)
+binary_ecu <- fread("data/ecuador_binary_matrix_final.csv", data.table = F)
+microsat_ecu <- fread("data/ecuador_binary_microsat_final.csv", data.table = F)
+ecu_epi <- fread("data/ecuador_epi.csv", data.table = F)
+outbreak_metadata <- read.csv("data/ecuador_varcode1_47types_metadata.csv")
+```
+
+### Make matrices
+```{r}
+matrix_all <- binary_all
+rownames(matrix_all) <- matrix_all$DBLa_type
+matrix_all <- matrix_all[, -1]
+matrix_all <- as.matrix(matrix_all)
+
+ecu_matrix <- binary_ecu 
+rownames(ecu_matrix) <- ecu_matrix$DBLa_type
+ecu_matrix <- ecu_matrix[, -1]
+ecu_matrix <- as.matrix(ecu_matrix)
+```
+
+## DBLα sampling depth
+There were a total of `r nrow(binary_ecu)` DBLα types and `r ncol(ecu_matrix)` isolates in Ecuador.
+
+### How well have we sampled the *var* diversity in Ecuador?
+```{r sampling rarefaction curve Ecuador, fig.align = "center"}
+ecu_curve <- specaccum(t(ecu_matrix), method = "rarefaction")
+plot(ecu_curve, xvar = "individuals", ci.type = "polygon", xlab = "Number of DBLα sequences sampled in Ecuador", ylab = "Number of DBLα types identified in Ecuador")
+#save this via Rstudio
+```
+
+### How well have we sampled the *var* diversity in South America?  
+There were a total of `r nrow(binary_all)` DBLα types and `r ncol(matrix_all)` isolates in South America.
+```{r sampling rarefaction curve SAm}
+SAm_curve <- specaccum(t(matrix_all), method = "rarefaction")
+plot(SAm_curve, xvar = "individuals", ci.type = "polygon", xlab = "Number of DBLα sequences sampled in South America", ylab = "Number of DBLα types identified in South America")
+##save this via Rstudio
+```
+
+## Applying the *var*code to examine transmission patterns in Ecuador
+### Genetic similarity: calculate directional PTS (retrospectively)
+Because we are interested in looking at PTS or genetic similarity of parasites retrospecively, i.e. what happens *after* the outbreak, we will only examine pairwise comparisons of isolates retrospectively. This means that we will compare isolates "backwards" to identify how similar they are to the outbreak clone, or to anything else circulating before its identification.
+```{r}
+genSim_ecu <- geneticSimilarity(t(ecu_matrix))
+genSim_ecu[upper.tri(genSim_ecu)] <- NA
+GStable_ecu <- GSmatrixToTable(genSim_ecu) 
+```
+
+### Microsatellites: PAS
+Here we will perform an analysis of the microsatellite PAS for every sample pair.
+
+*Note* that for the PAS comparisons we actually don't need the GS directional PTS for the majority of comparisons because the denominator is the same - however, we do have N=2 isolates with 6 alleles (i.e. 1 allele missing) and N=1 isolate with 5 alleles (i.e. 2 missing alleles), so will still calculate GS.
+```{r}
+microsat_ecu <- microsat_ecu %>% filter(SampleID %in% ecu_epi$SampleID) %>% 
+                                       column_to_rownames("SampleID") %>% 
+                                       select(-one_of(c("MS_TA11", "MS_24901", "MS_C2M341", "MS_C3M691")))
+
+microsat_PAS <- geneticSimilarity(microsat_ecu)
+microsat_PAS[upper.tri(microsat_PAS)] <- NA
+PAStable_ecuMS <- GSmatrixToTable(microsat_PAS)
+```
+
+### PTS vs PAS
+We can now compare the PTS and PAS values for each pairwise comparison (retrospectively) by matching the microsat pairwise comparisons SampleID1-SampleID2 with *var* enabling a direct comparison. 
+
+We are interested in looking at: how correlated are predictions of recombinants by *var* compared to MS?  
+```{r create table with PTS and PAS}
+GStable_ecu_varMS <- GStable_ecu %>% left_join(PAStable_ecuMS, by = c("SampleID1", "SampleID2"))
+GStable_ecu_varMS <- GStable_ecu_varMS %>% rename_at("GS_score.x", ~"PTS_score") %>% 
+                                           rename_at("GS_score.y", ~"PAS_score") 
+                                     
+correlation_plot <- GStable_ecu_varMS %>%
+   ggplot(aes(x = PTS_score, y = PAS_score)) + 
+      geom_jitter(shape = 21, color = "black", size = 2) +
+      #stat_smooth_func(geom = "text", method = "lm", hjust = 0, parse = T) +
+      geom_smooth(method = "lm", se = T, color = "darkgrey") +
+      scale_y_continuous(breaks = seq(0, 1, by = 0.25)) + 
+      theme_cowplot() +
+      ylab(expression(paste("P"["AS"], " score"))) +
+      xlab(expression(paste("P"["TS"], " score"))) +
+      background_grid(major = "xy", minor = "none") 
+
+cor.test(GStable_ecu_varMS$PTS_score, GStable_ecu_varMS$PAS_score, method = c("pearson"))
+save_plot("viz/correlation_PTSvPAS.png", correlation_plot, base_width = 8, base_height = 6)
+correlation_plot
+```
+There were a total of `r GStable_ecu_varMS %>% filter(PAS_score == 1 & PTS_score <= 0.50) %>% nrow()` (`r ceiling((GStable_ecu_varMS %>% filter(PAS_score == 1 & PTS_score <= 0.50) %>% nrow())/(GStable_ecu_varMS %>% filter(PAS_score == 1) %>% nrow())*100)`%) out of `r GStable_ecu_varMS %>% filter(PAS_score == 1) %>% nrow()` pairwise comparisons where PAS=1 but PTS ≤0.50. 
+
+There were a total of `r GStable_ecu_varMS %>% filter(PAS_score > 0.50 & PTS_score <= 0.50) %>% nrow()` (`r ceiling((GStable_ecu_varMS %>% filter(PAS_score > 0.50 & PTS_score <= 0.50) %>% nrow())/(GStable_ecu_varMS %>% filter(PAS_score > 0.50) %>% nrow())*100)`%) out of `r GStable_ecu_varMS %>% filter(PAS_score > 0.50) %>% nrow()` pairwise comparisons where PAS>0.50 but PTS ≤0.50. 
+
+## Network Analysis: *var*
+### Visualizing genetic similarity network (PTS) using tidygraph/ggraph
+Now we want to examine the relationships among repertoires by visualizing the retrospective PTS values in a network. 
+
+For future reference I am building the network by following the guidelines from this [tutorial](https://shirinsplayground.netlify.com/2018/03/got_network/?utm_campaign=News&utm_medium=Community&utm_source=DataCamp.com)) and this [tutorial](https://www.jessesadler.com/post/network-analysis-with-r/). I will build the network using gg syntax (i.e. similar to ggplot syntax) using the packages `ggraph` and `tidygraph`.  
+
+First we need to save our data in the proper format to build the network. The `GStable_ecu` becomes our `edges` dataset, and the epi data becomes our `nodes` dataset. *Note*: make sure to use the following code to create the `edges` (i.e. assigning id), if not the PTS edges between isolates may be wrong. This way we ensure that the id.x and id.y of each edge corresponds to their actual SampleID in the nodes dataset.  
+
+```{r tidygraph for ecuador network}
+ecu_edges <- GStable_ecu %>% left_join(ecu_epi, by = c("SampleID1" = "SampleID")) %>% rename(id.x = id)
+ecu_edges <- ecu_edges %>% left_join(ecu_epi, by = c("SampleID2" = "SampleID")) %>% rename(id.y = id)
+ecu_edges <- ecu_edges %>% select(id.x, id.y, GS_score)
+
+ecu_tidy <- tbl_graph(nodes = ecu_epi, edges = ecu_edges, directed = T)
+```
+The tibble `tidy_graph` object consists of both `edges` and `nodes`, either of which can be activated depending on what we need to do. 
+
+#### Defining *var*codes (PTS >= 0.9)
+```{r}
+varcode_list <- ecu_epi %>% select(SampleID, varcode)
+varcode_list$SampleID <- as.factor(varcode_list$SampleID)
+varcode_list$varcode <- as.factor(varcode_list$varcode)
+varcode_list <- varcode_list %>% column_to_rownames("SampleID")
+varcode_colors <- list(varcode = c("varcode1" = "#fb9a99", "varcode2" = "#e538a9","varcode3" = "#48B24F", "varcode4" = "#30d5c8", "varcode5" = "#E4B031", "varcode6" = "#3090d5", "varcode7" = "#CAD93F", "varcode8" = "#9ac4b3", "varcode9" = "#a880bb"))
+
+ecu_varcodes_network <- ecu_tidy %>% activate(edges) %>% filter(GS_score >= 0.9) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID",
+       fill = "") +
+  scale_fill_manual(values = varcode_colors$varcode, labels = c("varcode1 (N=36)", "varcode2 (N=3)", "varcode3 (N=3)", "varcode4 (N=1)", "varcode5 (N=1)", "varcode6 (N=3)", "varcode7 (N=8)", "varcode8 (N=2)", "varcode9 (N=1)")) +
+  theme_graph()
+
+save_plot("viz/ecuador_varcode_network.png", ecu_varcodes_network, base_width = 8, base_height = 6)
+ecu_varcodes_network
+```
+We identify 9 *var*codes in Ecuador. *Note*: ECPf004 and ECPf011 are undersampled, and belong to *var*code1. The number of isolates grouped in each *var*code is: `r knitr::kable(ecu_epi %>% group_by(varcode) %>% tally()) %>% kable_styling()`
+
+#### How many *var*codes were there in each timepoint?
+```{r}
+timepoints <- c("2013", "2014", "2015")
+totalnum_varcodes <- c("3", "8", "4")
+varcodes_bytime <- data.frame(timepoints, totalnum_varcodes)
+```
+The number of *var*codes identified in each timepoint was as follows: `r kable(varcodes_bytime) %>% kable_styling()`.
+
+#### How do *var*codes persist in time?
+```{r}
+varcode <- c("varcode1", "varcode2", "varcode3", "varcode6", "varcode7", "varcode8", "varcode4", "varcode5", "varcode9")
+vc2013 <- c(30, 2, 1, NA, NA, NA, NA, NA, NA)
+vc2014 <- c(4, 1, 2, 2, 6, 2, 1, 1, NA)
+vc2015 <- c(2, NA, NA, 1, 2, NA, NA, NA, 1)
+varcodes_temporal <- data.frame(varcode, vc2013, vc2014, vc2015)
+varcodes_temporal <- varcodes_temporal %>% rename_at("vc2013", ~"2013") %>% rename_at("vc2014", ~"2014") %>% rename_at("vc2015", ~"2015")
+
+varcodes_timeline <- varcodes_temporal %>% 
+  melt(id.var = "varcode") %>% 
+  rename_at("variable", ~"Year") %>% 
+  rename_at("value", ~"Frequency") %>% 
+  mutate(varcode = factor(varcode, levels = c("varcode9", "varcode8", "varcode7", "varcode6", "varcode5", "varcode4", "varcode3", "varcode2", "varcode1"))) %>% 
+  ggplot(aes(Year, factor(varcode))) + 
+      geom_point(aes(size = Frequency, color = varcode)) +
+      geom_text(aes(label = Frequency), size = 2.5, vjust = 1.5, hjust = -1) +
+      scale_size_continuous(name = "Number of Pf isolates",
+             breaks = c(1, 10, 30),
+             labels = c("1", "10", "30")) +
+      scale_color_manual(values = varcode_colors$varcode, labels = varcode_list) +
+      annotate("segment", x = 1, xend = 3, y = 9, yend = 9, colour = "#fb9a99") +
+      annotate("segment", x = 1, xend = 2, y = 8, yend = 8, colour = "#e538a9") +
+      annotate("segment", x = 1, xend = 2, y = 7, yend = 7, colour = "#48B24F") +
+      annotate("segment", x = 2, xend = 3, y = 4, yend = 4, colour = "#3090d5") +
+      annotate("segment", x = 2, xend = 3, y = 3, yend = 3, colour = "#CAD93F") +  
+      ylab("") +
+      theme_bw() 
+
+save_plot("viz/varcodes_timeline.png", varcodes_timeline)
+varcodes_timeline
+```
+
+### Duration of *var*code persistence
+Now we can calculate the average days a *var*code persisted. 
+```{r duration of persistance}
+ecu_epi$DateCollected <- as.Date(ecu_epi$DateCollected)
+
+#ecu_epi %>% filter(SampleID == "ECPf003" | SampleID == "ECPf076") %>% select(varcode, DateCollected) 
+
+vc1_duration <- data.frame(varcode = "varcode1", FirstID = subset(ecu_epi, SampleID == "ECPf003")$DateCollected, LastID = subset(ecu_epi, SampleID == "ECPf076")$DateCollected) 
+
+vc2_duration <- data.frame(varcode = "varcode2", FirstID = subset(ecu_epi, SampleID == "ECPf024")$DateCollected, LastID = subset(ecu_epi, SampleID == "ECPf045")$DateCollected) 
+
+vc3_duration <- data.frame(varcode = "varcode3", FirstID = subset(ecu_epi, SampleID == "ECPf035")$DateCollected, LastID = subset(ecu_epi, SampleID == "ECPf053")$DateCollected) 
+
+vc6_duration <- data.frame(varcode = "varcode6", FirstID = subset(ecu_epi, SampleID == "ECPf051")$DateCollected, LastID = subset(ecu_epi, SampleID == "ECPf072")$DateCollected) 
+
+vc7_duration <- data.frame(varcode = "varcode7", FirstID = subset(ecu_epi, SampleID == "ECPf056")$DateCollected, LastID = subset(ecu_epi, SampleID == "ECPf067")$DateCollected) 
+
+vc_duration <- bind_rows(vc1_duration, vc2_duration, vc3_duration, vc6_duration, vc7_duration)
+
+vc_duration <- vc_duration %>% mutate(duration_days = difftime(LastID, FirstID, units = c("days"))) %>% 
+                               mutate(duration_yr = round(duration_days/365, 2)) %>% 
+                               mutate(duration_months = round(duration_yr*12, 2))
+```
+The *var*codes persisted for the following amount of time: `r knitr::kable(vc_duration) %>% kable_styling()`
+
+The summary statistics for the duration of each *var*code  in days was: `r knitr::kable(vc_duration %>% summarize(min_days = min(duration_days), med_days = median(duration_days), avg_days = mean(duration_days), max_days = max(duration_days))) %>% kable_styling()` 
+
+The summary statistics for the duration of each *var*code in months was: `r knitr::kable(vc_duration %>% summarize(min_months = min(duration_months), med_months = median(duration_months), avg_months = mean(duration_months), max_months = max(duration_months))) %>% kable_styling()` 
+
+The summary statistics for the duration of each *var*code in years was: `r knitr::kable(vc_duration %>% summarize(min_yr = min(duration_yr), med_yr = median(duration_yr), avg_yr = mean(duration_yr), max_yr = max(duration_yr))) %>% kable_styling()` 
+
+#### Defining *var*codes in San Lorenzo (PTS >= 0.9)
+```{r}
+ecu_tidy %>% activate(nodes) %>% filter(LocationCode == "San Lorenzo, Esmeraldas") %>% 
+  activate(edges) %>% filter(GS_score >= 0.9) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID",
+       fill = "") +
+  scale_fill_manual(values = varcode_colors$varcode) +
+  theme_graph()
+```
+
+#### Identifying recombinants: transmission network *var*codes (PTS >= 0.5)
+```{r}
+ecuador_recombinants_network <- ecu_tidy %>% activate(edges) %>% filter(GS_score >= 0.5) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  scale_fill_manual(values = varcode_colors$varcode, labels = varcode_list) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID") +
+  theme_graph()
+
+save_plot("viz/ecuador_recombinants_network.png", ecuador_recombinants_network, base_width = 8, base_height = 6)
+ecuador_recombinants_network
+```
+
+## Network analysis: microsatellites
+```{r}
+ecuMSedges <- PAStable_ecuMS %>% left_join(ecu_epi, by = c("SampleID1" = "SampleID")) %>% rename(id.x = id)
+ecuMSedges <- ecuMSedges %>% left_join(ecu_epi, by = c("SampleID2" = "SampleID")) %>% rename(id.y = id)
+ecuMSedges <- ecuMSedges %>% select(id.x, id.y, GS_score)
+
+ecuMS_tidy <- tbl_graph(nodes = ecu_epi, edges = ecuMSedges, directed = T)
+```
+
+### Defining clones by MS
+```{r}
+ecuador_MSclusters_network <- ecuMS_tidy %>% activate(edges) %>% filter(GS_score >= 0.90) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  scale_fill_manual(values = varcode_colors$varcode, labels = varcode_list) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID") +
+  theme_graph()
+
+save_plot("viz/ecuador_MSclusters_network.png", ecuador_MSclusters_network, base_width = 8, base_height = 6)
+ecuador_MSclusters_network
+```
+
+### Defining clones by MS
+Allowing for 1 allele diff
+```{r}
+ecuador_MSclusters_network80 <- ecuMS_tidy %>% activate(edges) %>% filter(GS_score >= 0.80) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4) +
+  scale_fill_manual(values = varcode_colors$varcode, labels = varcode_list) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID") +
+  theme_graph()
+
+save_plot("viz/ecuador_MSclusters_network_PTS80.png", ecuador_MSclusters_network80, base_width = 8, base_height = 6)
+ecuador_MSclusters_network80
+```
+
+### MS clones supplementary figure
+```{r}
+ecuador_MSclusters_supp <- ecuador_MSclusters_network + ecuador_MSclusters_network80 +
+  plot_layout(guides = "collect") + plot_annotation(tag_levels = "a")
+  
+save_plot("viz/ecuador_MSclusters_networks_both.png", ecuador_MSclusters_supp, base_width = 12, base_height = 6)
+ecuador_MSclusters_supp
+```
+
+### Identifying recombinants by MS: transmission network
+```{r}
+ecuador_MSrecomb_network <- ecuMS_tidy %>% activate(edges) %>% filter(GS_score >= 0.5) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = varcode), shape = 21, color = "black", size = 4.5) +
+  scale_fill_manual(values = varcode_colors$varcode, labels = varcode_list) +
+  #geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID") +
+  theme_graph()
+
+save_plot("viz/ecuador_MSrecomb_network.png", ecuador_MSrecomb_network, base_width = 8, base_height = 6)
+ecuador_MSrecomb_network
+```
+This very clearly shows that describing transmission dynamics using microsatellites is not sufficient to identify recent genetic exchanges and recent recombination/transmission events since everything is connected by MS. Since *var* genes are rapidly evovling compared to MS, they allow us to "track" recombination and transmission dynamics in space and time.  
+
+## Clustering Analysis (heatmaps)
+### *var*code heatmap clustered
+```{r}
+###Trying to order the clusters by "year"
+pheatmap(t(ecu_matrix), col = c("white", "black"),
+         annotation_row = varcode_list, 
+         annotation_colors = varcode_colors, 
+         fontsize_row = 5, fontsize_col = 5, 
+         cluster_rows = T, cluster_cols = F, 
+         legend = F, 
+         treeheight_col = 0, 
+         show_colnames = F,
+         show_rownames = F, 
+         #filename = "viz/varcode_heatmap.png",
+         width = 8, 
+         height = 4)
+```
+
+### Microsat heatmap
+```{r}
+###Trying to order the clusters by "year"
+pheatmap(microsat_ecu, col = c("white", "black"),
+         annotation_row = varcode_list, 
+         annotation_colors = varcode_colors, 
+         fontsize_row = 5, fontsize_col = 5, 
+         cluster_rows = T, cluster_cols = F, 
+         legend = F, 
+         treeheight_col = 0, 
+         show_colnames = F,
+         show_rownames = F,
+         #filename = "viz/microsat_heatmap.png",
+         width = 8, 
+         height = 4)
+```
+
+## Spatial Analysis
+### Map of Ecuador
+```{r}
+register_google(key = "INSERT_KEY")
+
+geocode("Ecuador")
+map <- get_googlemap(center = "Ecuador", zoom = 7, maptype = "terrain", style = "feature:poi.business|visibility:off&style=feature:road|element:labels.icon|visibility:off&style=feature:transit|visibility:off") 
+ecu_map <- ggmap(map) + xlab("Longitude") + ylab("Latitude")
+ecu_map <- ecu_map + scalebar(x.min = -77, x.max = -75,
+                              y.min = -4.8, y.max = -4.7,
+                              dist = 100, 
+                              dist_unit = "km", 
+                              transform = T, 
+                              model = "WGS84",
+                              #st.bottom = F,
+                              st.dist = 1,
+                              height = 1, 
+                              st.size = 3) +
+                              annotation_north_arrow(location = "br", 
+                                                     pad_x = unit(0.4, "in"), 
+                                                     pad_y = unit(0.4, "in"),
+                                                     style = north_arrow_fancy_orienteering) 
+
+ecu_map_zoom <- ggmap(map) + xlab("Longitude") + 
+          ylab("Latitude") + 
+          ylim(-2.25, 1.4) +
+          scalebar(x.min = -77, x.max = -75,
+                   y.min = -2.1, y.max = -2.0,
+                   dist = 100, 
+                   dist_unit = "km", 
+                   transform = T, 
+                   model = "WGS84",
+                   #st.bottom = F,
+                   st.dist = 1,
+                   height = 1, 
+                   st.size = 3) +
+          annotation_north_arrow(location = "br", 
+                                 pad_x = unit(0.9, "in"), 
+                                 pad_y = unit(0.4, "in"),
+                                 style = north_arrow_fancy_orienteering)
+
+ecu_map_piecharts <- ggmap(map) + xlab("Longitude") + 
+          ylab("Latitude") + 
+          ylim(-2.25, 1.6) +
+          scalebar(x.min = -77, x.max = -75,
+                   y.min = -2.1, y.max = -2.0,
+                   dist = 100, 
+                   dist_unit = "km", 
+                   transform = T, 
+                   model = "WGS84",
+                   #st.bottom = F,
+                   st.dist = 1,
+                   height = 1, 
+                   st.size = 3) +
+          annotation_north_arrow(location = "br", 
+                                 pad_x = unit(0.1, "in"), 
+                                 pad_y = unit(3.2, "in"),
+                                 style = north_arrow_fancy_orienteering)
+
+```
+
+```{r}
+ecuador_gmap_locations <- ecu_map + geom_point(data = ecu_epi, aes(x = lon, y = lat, fill = LocationCode), shape = 21, color = "black", size = 3) +   
+          scale_fill_manual(values = loc_cols,
+                            labels = locationLabels$LocationCode) +
+  labs(fill = "Location")
+
+save_plot("viz/ecuador_googlemap_samplinglocations.png", ecuador_gmap_locations)
+ecuador_gmap_locations
+```
+
+### Number of isolates sampled per year stratified by location - bar plot
+```{r}
+ecu_epi <- ecu_epi %>% 
+  mutate(Year = case_when(DateCollected < "2013-12-31" ~"2013",
+                          DateCollected < "2014-12-31" ~"2014",
+                          DateCollected < "2015-12-31" ~"2015",
+                          TRUE ~"CHECK")) 
+
+barplot_samples_perlocation <- ecu_epi %>% 
+  group_by(LocationCode, Year) %>% 
+  tally() %>% 
+  ggplot(aes(x = Year, y = n, fill = LocationCode)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = loc_cols,
+                      labels = locationLabels$LocationCode) +
+    background_grid(major = "xy", minor = "none") +
+    labs(x = "Year", 
+         y = "Number of samples",
+         fill = "Location") +
+    theme(legend.position = "none") +
+    theme_cowplot() + 
+    background_grid(major = "xy")
+
+save_plot("viz/ecuador_barplot_sampling.png", barplot_samples_perlocation)
+barplot_samples_perlocation 
+```
+
+### Save sampling locations plot
+```{r}
+plot_sampling_locations <- (ecuador_gmap_locations + theme(legend.position = "none")) + barplot_samples_perlocation + theme(legend.position = "bottom") + plot_annotation(tag_levels = 'A')
+
+plot_sampling_locations
+```
+
+### Spatial network: google map
+```{r}
+seg_data <- ecu_edges %>% filter(GS_score >= 0.5) 
+seg_data <- seg_data %>% left_join(ecu_epi, by = c("id.x"="id"))
+seg_data <- seg_data %>% left_join(ecu_epi, by = c("id.y"="id"))
+
+seg_data <- seg_data %>% group_by(varcode.x, varcode.y, lon.x, lat.x, lon.y, lat.y) %>% tally()
+ecu_map_zoom +
+          geom_segment(data = seg_data,
+                       aes(x = lon.x, y = lat.x, xend = lon.y, yend = lat.y, alpha = 0.1, size = n),
+                       linejoin = "mitre") +
+          geom_point(data = ecu_epi, 
+                     aes(x = lon, y = lat, fill = varcode), 
+                     shape = 21, color = "black", size = 3.5, 
+                     position = position_jitter(h = 0.1, w = 0.1)) +
+          scale_size_area() +
+          scale_fill_manual(values = varcode_colors$varcode, 
+                            labels = varcode_list) 
+```
+
+### Real-time spatial network: google map
+```{r}
+seg_data1 <- ecu_edges %>% filter(GS_score >= 0.5) 
+seg_data1 <- seg_data1 %>% left_join(ecu_epi, by = c("id.x"="id"))
+seg_data1 <- seg_data1 %>% left_join(ecu_epi, by = c("id.y"="id"))
+seg_data1 <- seg_data1 %>% rename_at("DateCollected.x", ~"DateCollected")
+
+googlemapSamplesRTNet <- ecu_map_zoom +
+          geom_segment(data = seg_data1,
+                       aes(x = lon.x, y = lat.x, xend = lon.y, yend = lat.y, alpha = 0.1, size = 0.5),
+                       linejoin = "bevel") +
+          geom_point(data = ecu_epi, 
+                     aes(x = lon, y = lat, fill = varcode), 
+                     shape = 21, color = "black", size = 3.5, 
+                     position = position_jitter(h = 0.1, w = 0.1)) +
+          scale_size_area() +
+          scale_fill_manual(values = varcode_colors$varcode, 
+                            labels = varcode_list) +
+          scale_alpha(guide = "none") +
+          scale_size(guide = "none") +
+          transition_states(DateCollected, 
+                          transition_length = 1, 
+                          state_length = 5) +
+          labs(title = "", 
+               subtitle = 'Samples collected on {closest_state}') +
+          shadow_mark(size = 3)
+
+googlemapSamplesRTNet_anim <- animate(googlemapSamplesRTNet, width = 8, height = 8, res = 500, units = "in", duration = 15, fps = 2, detail = 5, render = gifski_renderer())
+anim_save("viz/spatial_network_realtime_googlemap.gif", googlemapSamplesRTNet_anim)
+
+googlemapSamplesRTNet_anim <- animate(googlemapSamplesRTNet, width = 8, height = 8, res = 250, units = "in", duration = 15, fps = 2, detail = 5, render = gifski_renderer())
+anim_save("viz/spatial_network_realtime_googlemap_lowres.gif", googlemapSamplesRTNet_anim)
+```
+![](viz/spatial_network_realtime_googlemap_lowres.gif) 
+
+### *var*code pie charts:
+Now we want to overlap pie charts with the proportion of isolates with each *var*code identified in a given location in each year. This way we can include a map of the *var*code locations that can be included in our figure showing the *var*code persistence/maintenance over time.
+```{r}
+varcode_piechartdata <- ecu_epi %>% group_by(LocationCode, lon, lat, Year, varcode) %>% tally()
+
+ggplot(varcode_piechartdata, aes(x = "", y = n, fill = varcode)) +
+  geom_bar(width = 1, stat = "identity", position = "fill") + 
+  scale_fill_manual(values = varcode_colors$varcode, 
+                    labels = varcode_list) +
+  facet_wrap(~LocationCode) + 
+  coord_polar(theta = "y", start = 0) +
+  theme_void()
+
+ggplot(varcode_piechartdata, aes(x = "", y = n, fill = varcode)) +
+  geom_bar(width = 1, stat = "identity", position = "fill") + 
+  scale_fill_manual(values = varcode_colors$varcode, 
+                    labels = varcode_list) +
+  facet_wrap(Year~LocationCode) + 
+  coord_polar(theta = "y", start = 0) +
+  theme_void()
+```
+
+### Pie chart maps by year
+First we need to create a dataframe with % varcode in each location.
+```{r}
+df_location_varcode_totals <- ecu_epi %>% 
+        tabyl(LocationCode, Year) %>% rename_at("2013", ~"total_2013") %>% rename_at("2014", ~"total_2014") %>% rename_at("2015", ~"total_2015") 
+
+varcodes_by_loc <- ecu_epi %>% tabyl(LocationCode, varcode, Year)
+
+varcode_prop_2013 <- varcodes_by_loc[[1]] %>% 
+        adorn_totals("col") %>% 
+        mutate(year = "2013") 
+
+varcode_prop_2014 <- varcodes_by_loc[[2]] %>% 
+        adorn_totals("col") %>% 
+        mutate(year = "2014") 
+
+varcode_prop_2015 <- varcodes_by_loc[[3]] %>% 
+        adorn_totals("col") %>% 
+        mutate(year = "2015") 
+        
+
+
+location_coords <- ecu_epi %>% group_by(LocationCode, lon, lat) %>% tally() %>% select(-n)
+
+varcode_props <- rbind(varcode_prop_2013, varcode_prop_2014, varcode_prop_2015)
+varcode_props <- varcode_props %>% left_join(location_coords, by = "LocationCode") %>% 
+                                   select(LocationCode, lon, lat, year, Total, varcode1:varcode9) %>% 
+                                   mutate(radius = (0.4 * sqrt(Total) / sqrt(max(Total)))) 
+```
+
+#### *var*code spatial distribution: 2013
+```{r}
+piecharts_2013 <- varcode_props %>% filter(year == "2013", Total > 0)
+
+map_pies_2013 <- ecu_map_piecharts +
+  geom_scatterpie(data = piecharts_2013, 
+                  aes(x = lon, 
+                      y = lat, 
+                      r = radius,
+                      group = LocationCode),
+                  cols = c("varcode1", "varcode2", "varcode3", "varcode4", "varcode5", "varcode6", "varcode7", "varcode8", "varcode9")) +
+  scale_fill_manual(breaks = varcode_list,
+                    values = varcode_colors$varcode, 
+                    labels = varcode_list) +
+  geom_scatterpie_legend(piecharts_2013$radius, 
+                         n = 2, 
+                         labeller = function(x) x = unique(piecharts_2013$Total),
+                         x = -75.6, 
+                         y = -1.5) 
+
+save_plot("viz/ecuador_googlemap_piecharts2013.png", map_pies_2013, base_width = 8, base_height = 6)
+map_pies_2013
+```
+
+#### *var*code spatial distribution: 2014
+```{r}
+piecharts_2014 <- varcode_props %>% filter(year == "2014", Total > 0)
+
+map_pies_2014 <- ecu_map_piecharts +
+  geom_scatterpie(data = piecharts_2014, 
+                  aes(x = lon, 
+                      y = lat, 
+                      r = radius,
+                      group = LocationCode),
+                  cols = c("varcode1", "varcode2", "varcode3", "varcode4", "varcode5", "varcode6", "varcode7", "varcode8", "varcode9")) +
+  scale_fill_manual(breaks = varcode_list,
+                    values = varcode_colors$varcode, 
+                    labels = varcode_list) +
+  geom_scatterpie_legend(piecharts_2014$radius, 
+                         n = 3, 
+                         labeller = function(x) x = unique(piecharts_2014$Total),
+                         x = -75.4, 
+                         y = -1.6) 
+
+save_plot("viz/ecuador_googlemap_piecharts2014.png", map_pies_2014, base_width = 8, base_height = 6)
+map_pies_2014
+```
+
+#### *var*code spatial distribution: 2014
+```{r}
+piecharts_2015 <- varcode_props %>% filter(year == "2015", Total > 0)
+
+map_pies_2015 <- ecu_map_piecharts +
+  geom_scatterpie(data = piecharts_2015, 
+                  aes(x = lon, 
+                      y = lat, 
+                      r = radius,
+                      group = LocationCode),
+                  cols = c("varcode1", "varcode2", "varcode3", "varcode4", "varcode5", "varcode6", "varcode7", "varcode8", "varcode9")) +
+  scale_fill_manual(breaks = varcode_list,
+                    values = varcode_colors$varcode, 
+                    labels = varcode_list) +
+  geom_scatterpie_legend(piecharts_2015$radius, 
+                         n = 3, 
+                         labeller = function(x) x = unique(piecharts_2015$Total),
+                         x = -75.4, 
+                         y = -1.6) 
+
+save_plot("viz/ecuador_googlemap_piecharts2015.png", map_pies_2015, base_width = 8, base_height = 6)
+map_pies_2015
+```
+
+#### Leaflet just to visualize
+```{r}
+library(leaflet.minicharts)
+library(leaflet)
+
+data_leaf <- varcode_props %>% 
+  select(LocationCode, lon, lat, year, Total, starts_with("varcode")) %>% 
+  mutate_at(vars(-one_of("LocationCode", "lat", "lon", "year")), as.numeric)
+
+leaflet(data_leaf) %>% 
+            addTiles() %>% 
+            addMinicharts(lng = data_leaf$lon, lat = data_leaf$lat,
+                          type = "pie",
+                          time = data_leaf$year,
+                          chartdata = data_leaf[, c("varcode1", "varcode2", "varcode3", "varcode4", "varcode5", "varcode6", "varcode7", "varcode8", "varcode9")],
+                          colorPalette = c("#fb9a99", "#e538a9", "#48B24F", "#30d5c8", "#E4B031", "#3090d5", "#CAD93F", "#9ac4b3", "#a880bb"),
+                          width = 50 * sqrt(data_leaf$Total) / sqrt(max(data_leaf$Total)), transitionTime = 0) %>% 
+            addEasyButton(easyButton(
+                icon = "fa-crosshairs", title = "ME",
+                onClick = JS("function(btn, map){ map.locate({setView: true}); }"))) %>% 
+            addScaleBar(position = "bottomleft", options = scaleBarOptions(metric = TRUE, imperial = F))
+```
+
+### Spatial *var*code network
+```{r}
+data_piechartnetwork <- ecu_epi %>%
+        tabyl(LocationCode, varcode) %>% 
+        adorn_totals("col") %>% 
+        mutate(radius = (0.3 * sqrt(Total) / sqrt(max(Total)))) %>% left_join(location_coords, by = "LocationCode")
+
+map_pies_network <- ggmap(map) + xlab("Longitude") + 
+          ylab("Latitude") + 
+          ylim(-2.2, 1.6) +
+          scalebar(x.min = -77, x.max = -75,
+                   y.min = -2.1, y.max = -2.0,
+                   dist = 100, 
+                   dist_unit = "km", 
+                   transform = T, 
+                   model = "WGS84",
+                   #st.bottom = F,
+                   st.dist = 1,
+                   height = 1, 
+                   st.size = 3) +
+          annotation_north_arrow(location = "br", 
+                                 pad_x = unit(0.1, "in"), 
+                                 pad_y = unit(3.2, "in"),
+                                 style = north_arrow_fancy_orienteering) +
+          geom_segment(data = seg_data,
+                       aes(x = lon.x, y = lat.x, xend = lon.y, yend = lat.y, alpha = 0.1, size = n),
+                       linejoin = "mitre") +
+  geom_scatterpie(data = data_piechartnetwork, 
+                  aes(x = lon, 
+                      y = lat, 
+                      r = radius,
+                      group = LocationCode),
+                  cols = c("varcode1", "varcode2", "varcode3", "varcode4", "varcode5", "varcode6", "varcode7", "varcode8", "varcode9")) +
+  scale_fill_manual(breaks = varcode_list,
+                    values = varcode_colors$varcode, 
+                    labels = varcode_list) +
+  scale_alpha(guide = "none") +
+  scale_size(guide = "none") +
+  geom_scatterpie_legend(data_piechartnetwork$radius, 
+                         n = 5, 
+                         labeller = function(x) x = sort(unique(data_piechartnetwork$Total)),
+                         x = -75.4, 
+                         y = -1.6) 
+
+save_plot("viz/ecuador_googlemap_spatialnetwork.png", map_pies_network, base_width = 8, base_height = 6)
+map_pies_network
+```
+
+## South America
+### MOI in South America
+```{r}
+data_MOI <- data.frame(colSums(matrix_all))
+colnames(data_MOI) <- c("repertoire_size")
+data_MOI <- data_MOI %>% rownames_to_column("SampleID")
+
+data_MOI$Location <- ifelse(grepl("^G", data_MOI$SampleID, ignore.case = T), "French Guiana",
+                                  ifelse(grepl("^P", data_MOI$SampleID, ignore.case = T), "Peru",
+                                         ifelse(grepl("^V", data_MOI$SampleID, ignore.case = T), "Venezuela",
+                                                ifelse(grepl("^Col", data_MOI$SampleID, ignore.case = T), "Colombia",
+                                                      ifelse(grepl("^ECPf", data_MOI$SampleID, ignore.case = T), "Ecuador", "CHECK")))))
+data_MOI$Location <- as.factor(data_MOI$Location)
+levels(data_MOI$Location)
+``` 
+
+#### What are the summary statistics for MOI?
+```{r}
+kable(data_MOI %>% group_by(Location) %>% summarize(min = min(repertoire_size), med = median(repertoire_size), mean = mean(repertoire_size), max = max(repertoire_size))) %>% kable_styling()
+```
+
+Set the color scale for each country
+```{r}
+country_list <- data_MOI %>% select(SampleID, Location)
+country_list$SampleID <- as.factor(country_list$SampleID)
+country_list$Location <- as.factor(country_list$Location)
+country_list <- country_list %>% column_to_rownames("SampleID")
+
+country_colors <- list(Location = c("Colombia" = "#fdb462", "Ecuador" = "#fb8072", "French Guiana" = "#a6d854", "Peru" = "#66c2a5", "Venezuela" = "#bebada"))
+```
+
+
+#### What are the MOI patterns in South American *P. falciparum* isolates?
+```{r}
+plot_MOI_SAm <- ggplot(data = data_MOI, aes(x = factor(SampleID), fill = Location)) + 
+  geom_bar(aes(y = repertoire_size), stat = "identity") +
+  scale_fill_manual(values = country_colors$Location,
+                       labels = country_list) +
+  scale_y_continuous(breaks = seq(0, 100, by = 30)) + 
+  labs(x = "Isolate",
+       y = "Repertoire size",
+       fill = "") +
+  theme_cowplot() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) + #element_text(angle = 90, vjust = 0.5)) +
+  background_grid(major = "y", minor = "none")
+
+save_plot("viz/SAm_MOI.png", plot_MOI_SAm)
+plot_MOI_SAm
+```
+
+## Number of shared types by country: South America
+Create a presence/absence matrix just of each country as a population (not isolate by isolate)
+```{r}
+country_matrix <- matrix_all %>% as.data.frame() %>% rownames_to_column("DBLa_type") %>% 
+                                 mutate(Colombia = rowSums(.[grepl("^Col", colnames(.))], na.rm = T),
+                                        Ecuador = rowSums(.[grepl("^ECPf", colnames(.))], na.rm = T),
+                                        `French Guiana` = rowSums(.[grepl("^G", colnames(.))], na.rm = T),
+                                        Peru = rowSums(.[grepl("^P", colnames(.))], na.rm = T),
+                                        Venezuela = rowSums(.[grepl("^V", colnames(.))], na.rm = T)) %>% 
+                                 select(DBLa_type, Colombia:Venezuela)
+
+country_matrix <- country_matrix %>% mutate(Colombia = ifelse(Colombia > 0, 1, 0),
+                                            Ecuador = ifelse(Ecuador > 0, 1, 0),
+                                            `French Guiana` = ifelse(`French Guiana` > 0, 1, 0),
+                                            Peru = ifelse(Peru > 0, 1, 0),
+                                            Venezuela = ifelse(Venezuela > 0, 1, 0)) %>% 
+                                     column_to_rownames("DBLa_type")
+#write.csv(country_matrix, "data/country_binary.csv")
+```
+The number of shared types identified in the countries was as follows:
+`r kable(country_matrix %>% mutate(shared = rowSums(.)) %>% group_by(shared) %>% count()) %>% kable_styling()`.  
+
+## Clustered Heatmap South America 
+We can also plot this as a heatmap, which clusters the countries by the number of types they share. Therefore, countries that share more types will be clustered together. 
+```{r}
+Country <- c("Colombia (N=112)", "Ecuador (N=195)", "French Guiana (N=249)", "Peru (N=157)", "Venezuela (N=176)")
+location <- c("Colombia (N=112)", "Ecuador (N=195)", "French Guiana (N=249)", "Peru (N=157)", "Venezuela (N=176)")
+anno_cols <- data.frame(location, Country)
+anno_cols <- anno_cols %>% column_to_rownames("location")
+colors_anno <- list(Country = c(`Colombia (N=112)` = "#fdb462", `Ecuador (N=195)` = "#66c2a5", `French Guiana (N=249)` = "#a6d854", `Peru (N=157)` = "#fb8072", `Venezuela (N=176)` = "#bebada"))
+
+country_heatmap <- pheatmap(t(country_matrix), col = c("white", "black"), annotation_row = anno_cols, annotation_colors = colors_anno, fontsize_row = 5, fontsize_col = 5, show_colnames = F, show_rownames = F, legend = F, treeheight_col = 0)
+
+save_plot("viz/SAm_country_heatmap.png", country_heatmap, base_width = 8, base_height = 4)
+country_heatmap
+```
+
+## Genetic Similarity and Network Analysis: South America
+For the directional PTS among South American isolates, we consider both the "forward" and "reverse" direction since there is not real temporal aspect to this dataset. The sampling locations and sampling times differ greatly, so we are only interested in identifying cluster of genetically-related parasites in space and/or time (i.e. not recent transmission events or "real-time" recombinations). 
+```{r SAm genetic similarity}
+genSim_all <- geneticSimilarity(t(matrix_all))
+GStable_all <- GSmatrixToTable(genSim_all) 
+```
+
+Here we do not need to select only the "backwards in time" direction, because the times between sampling collections vary greatly. We are only interested in identifying genetically-related parasites in space and time (i.e. not epidemiological time but perhaps evolutionary time). Because we don't know if the order matters (i.e. different countries) we can use both directions.
+
+Create an epi dataset for South America.
+```{r}
+all_epi <- data_MOI %>% mutate(id = 1:nrow(.))
+```
+
+```{r}
+GSall_edges <- GStable_all %>% left_join(all_epi, by = c("SampleID1" = "SampleID")) %>% rename(id.x = id)
+GSall_edges <- GSall_edges %>% left_join(all_epi, by = c("SampleID2" = "SampleID")) %>% rename(id.y = id)
+GSall_edges <- GSall_edges %>% select(id.x, id.y, GS_score)
+
+SAm_tidy <- tbl_graph(nodes = all_epi, edges = GSall_edges, directed = T)
+```
+
+### Defining *var*codes: South America
+```{r}
+SAm_varcodes_network <- SAm_tidy %>% activate(edges) %>% filter(GS_score >= 0.9) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = Location), shape = 21, color = "black", size = 3) +
+  scale_fill_manual(values = country_colors$Location,
+                       labels = country_list) +
+ # geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID",
+       fill = "") +
+  theme_graph()
+
+save_plot("viz/SAm_varcode_network.png", SAm_varcodes_network, base_width = 8, base_height = 6)
+SAm_varcodes_network
+```
+
+### Genetic Similarity Networks: South America
+```{r}
+SAm_recombinants_network <- SAm_tidy %>% #filter(SampleID != "ECPf004", SampleID != "ECPf011") %>% 
+  activate(edges) %>% filter(GS_score >= 0.5) %>% 
+  ggraph(layout = "fr") + 
+  geom_edge_link(color = "darkgrey", alpha = 0.5) + 
+  geom_node_point(aes(fill = Location), shape = 21, color = "black", size = 3) +
+  scale_fill_manual(values = country_colors$Location,
+                       labels = country_list) +
+ # geom_node_text(aes(label = SampleID), repel = TRUE) +
+  labs(edge_width = "SampleID",
+       fill = "") +
+  theme_graph() 
+
+save_plot("viz/SAm_recombinants_network.png", SAm_recombinants_network, base_width = 8, base_height = 6)
+SAm_recombinants_network
+```
+
+### Genetic similarity: *var*codes and South America
+We can also calculate the number of shared types or genetic similarity of the varcodes with South American isolates to corroborate the network visualizations (and add a quantitative measure). We need to recreate the varcode matrix with all 543 types identified in South America. 
+```{r create varcode matrix from matrix_all}
+varcode_vec <- ecu_epi %>% select(SampleID, varcode)
+varcode_vec$SampleID <- as.factor(varcode_vec$SampleID)
+varcode_vec$varcode <- as.factor(varcode_vec$varcode)
+
+vc1_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode1")$SampleID]
+vc2_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode2")$SampleID]
+vc3_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode3")$SampleID]
+vc4_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode4")$SampleID]
+vc5_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode5")$SampleID]
+vc6_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode6")$SampleID]
+vc7_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode7")$SampleID]
+vc8_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode8")$SampleID]
+vc9_matrixSAM <- matrix_all[, colnames(matrix_all) %in% subset(varcode_vec, varcode == "varcode9")$SampleID]
+
+vc1_matrixSAM_sum <- rowSums(vc1_matrixSAM) %>% as.data.frame()
+vc1_matrixSAM_sum <- vc1_matrixSAM_sum %>% mutate(varcode1 = ifelse(. > 0, 1, 0)) %>% select(varcode1)
+rownames(vc1_matrixSAM_sum) <- rownames(vc1_matrixSAM)
+
+vc2_matrixSAM_sum <- rowSums(vc2_matrixSAM) %>% as.data.frame()
+vc2_matrixSAM_sum <- vc2_matrixSAM_sum %>% mutate(varcode2 = ifelse(. > 0, 1, 0)) %>% select(varcode2)
+rownames(vc2_matrixSAM_sum) <- rownames(vc2_matrixSAM)
+
+vc3_matrixSAM_sum <- rowSums(vc3_matrixSAM) %>% as.data.frame()
+vc3_matrixSAM_sum <- vc3_matrixSAM_sum %>% mutate(varcode3 = ifelse(. > 0, 1, 0)) %>% select(varcode3)
+rownames(vc3_matrixSAM_sum) <- rownames(vc3_matrixSAM)
+
+vc4_matrixSAM_sum <- as.data.frame(vc4_matrixSAM) %>% rename_at("vc4_matrixSAM", ~"varcode4")
+vc5_matrixSAM_sum <- as.data.frame(vc5_matrixSAM) %>% rename_at("vc5_matrixSAM", ~"varcode5")
+
+vc6_matrixSAM_sum <- rowSums(vc6_matrixSAM) %>% as.data.frame()
+vc6_matrixSAM_sum <- vc6_matrixSAM_sum %>% mutate(varcode6 = ifelse(. > 0, 1, 0)) %>% select(varcode6)
+rownames(vc6_matrixSAM_sum) <- rownames(vc6_matrixSAM)
+
+vc7_matrixSAM_sum <- rowSums(vc7_matrixSAM) %>% as.data.frame()
+vc7_matrixSAM_sum <- vc7_matrixSAM_sum %>% mutate(varcode7 = ifelse(. > 0, 1, 0)) %>% select(varcode7)
+rownames(vc7_matrixSAM_sum) <- rownames(vc7_matrixSAM)
+
+vc8_matrixSAM_sum <- rowSums(vc8_matrixSAM) %>% as.data.frame()
+vc8_matrixSAM_sum <- vc8_matrixSAM_sum %>% mutate(varcode8 = ifelse(. > 0, 1, 0)) %>% select(varcode8)
+rownames(vc8_matrixSAM_sum) <- rownames(vc8_matrixSAM)
+
+vc9_matrixSAM_sum <- as.data.frame(vc9_matrixSAM) %>% rename_at("vc9_matrixSAM", ~"varcode9")
+
+varcode_matrixSAM <- bind_cols(vc1_matrixSAM_sum, vc2_matrixSAM_sum, vc3_matrixSAM_sum, vc4_matrixSAM_sum, vc5_matrixSAM_sum, vc6_matrixSAM_sum, vc7_matrixSAM_sum, vc8_matrixSAM_sum, vc9_matrixSAM_sum)
+rownames(varcode_matrixSAM) <- rownames(vc1_matrixSAM_sum)
+```
+The total number of types in each *var*code is now: `r knitr::kable(varcode_matrixSAM %>% colSums()) %>% kable_styling()` (which is identical to before with only N=195 types).
+
+Create the varcode and country matrix
+```{r create varcode country matrix}
+country_matrix_temp <- country_matrix %>% as.data.frame() %>% 
+                                          rownames_to_column("DBLa_type")
+varcode_matrixSAM_final <- varcode_matrixSAM %>% rownames_to_column("DBLa_type") %>% 
+                                                 left_join(country_matrix_temp, by = "DBLa_type")
+varcode_matrixSAM_final <- varcode_matrixSAM_final %>% column_to_rownames("DBLa_type") 
+
+varcode_matrixSAM_final <- varcode_matrixSAM_final %>%  rename_at("varcode1", ~"varcode1 (N=47)") %>% 
+                                                        rename_at("varcode2", ~"varcode2 (N=41)" ) %>% 
+                                                        rename_at("varcode3", ~"varcode3 (N=40)") %>% 
+                                                        rename_at("varcode4", ~"varcode4 (N=42)") %>% 
+                                                        rename_at("varcode5", ~"varcode5 (N=34)") %>% 
+                                                        rename_at("varcode6", ~"varcode6 (N=45)") %>% 
+                                                        rename_at("varcode7", ~"varcode7 (N=43)") %>% 
+                                                        rename_at("varcode8", ~"varcode8 (N=42)") %>% 
+                                                        rename_at("varcode9", ~"varcode9 (N=35)") %>% 
+                                                        rename_at("Colombia", ~"Colombia (N=112)") %>% 
+                                                        rename_at("Ecuador", ~"Ecuador (N=195)") %>% 
+                                                        rename_at("French Guiana", ~"French Guiana (N=249)") %>% 
+                                                        rename_at("Peru", ~"Peru (N=157)") %>% 
+                                                        rename_at("Venezuela", ~"Venezuela (N=176)")
+
+varcode_matrixSAM_final <- varcode_matrixSAM_final %>% as.matrix()
+```
+As we did before, for the directional PTS among the *var*codes and South American isolates, we consider both the "forward" and "reverse" direction since there is not real temporal aspect to this dataset. The sampling locations and sampling times differ greatly, so we are only interested in identifying cluster of genetically-related parasites in space and/or time (i.e. not recent transmission events or "real-time" recombinations). 
+
+
+```{r GenSim varcodes and SAm}
+genSim_varcodeSAM <- geneticSimilarity(t(varcode_matrixSAM_final))
+GStable_varcodeSAM <- GSmatrixToTable(genSim_varcodeSAM) 
+
+countryNs_colors <- list(Location = c("Colombia\n(N=112)" = "#fdb462", "Ecuador\n(N=195)" = "#fb8072", "French Guiana\n(N=249)" = "#a6d854", "Peru\n(N=157)" = "#66c2a5", "Venezuela\n(N=176)" = "#bebada"))
+
+varcode_country_tileplot <- GStable_varcodeSAM %>% filter(SampleID1 %like% "varcode", !SampleID2 %like% "varcode") %>% 
+    mutate(SampleID2 = case_when(SampleID2 == "Colombia (N=112)" ~"Colombia\n(N=112)",
+                                 SampleID2 == "Ecuador (N=195)" ~"Ecuador\n(N=195)",
+                                 SampleID2 == "French Guiana (N=249)" ~ "French Guiana\n(N=249)",
+                                 SampleID2 == "Peru (N=157)" ~ "Peru\n(N=157)",
+                                 SampleID2 == "Venezuela (N=176)" ~ "Venezuela\n(N=176)")) %>% 
+    ggplot(aes(x = SampleID2, y = SampleID1, fill = SampleID2)) +
+        geom_tile(aes(alpha = GS_score)) +
+        scale_fill_manual(values = countryNs_colors$Location,
+                          labels = c("Colombia\n(N=112)", "Ecuador\n(N=195)", "French Guiana\n(N=249)", "Peru\n(N=157)", "Venezuela\n(N=176)"),
+                      guide = "none") +
+        geom_text(aes(label = round(GS_score, 2))) +
+        theme(#axis.text.x = element_text(angle = 90),
+              axis.title.x = element_blank(),
+              axis.title.y = element_blank()) +
+        theme_cowplot() +
+        labs(x = "",
+             y = "",
+             fill = "",
+             alpha = expression(paste("P"["TS"], " score")))
+
+save_plot("viz/varcode_country_tileplot.png", varcode_country_tileplot, base_width = 8, base_height = 4)
+varcode_country_tileplot
+```
+
+#### Outbreak *var*code1: evolutionary history of types
+```{r}
+outbreak_recomb_evo <- varcode_matrixSAM %>%
+                            rownames_to_column("DBLa_type") %>%  
+                            select(DBLa_type, varcode1, varcode3, varcode4, varcode6, varcode7) %>% 
+                            filter(varcode1 > 0) 
+
+outbreak_recomb_evo_mat <- outbreak_recomb_evo %>% column_to_rownames("DBLa_type") %>% as.matrix()
+
+recomb_names <- data.frame(varcode = c("varcode1", "varcode3", "varcode4", "varcode6", "varcode7"),
+                           varcode_name = c("varcode1", "varcode3", "varcode4", "varcode6", "varcode7")) %>%
+             column_to_rownames("varcode_name")
+
+colors_recomb <- list(varcode = c("varcode1" = "#fb9a99", "varcode3" = "#48B24F", "varcode4" = "#30d5c8", "varcode6" = "#3090d5", "varcode7" = "#CAD93F"))
+
+#heatmap_outbreak_recomb <- 
+pheatmap(t(outbreak_recomb_evo_mat), 
+         col = c("white", "black"), 
+         annotation_row = recomb_names, 
+         annotation_colors = colors_recomb,
+         fontsize_row = 5, 
+         fontsize_col = 5, 
+         show_colnames = F, 
+         show_rownames = F, 
+         #filename = "viz/heatmap_outbreaktypes_recombinants.png",
+         legend = F, 
+         treeheight_col = 0,
+         width = 8, 
+         height = 4)
+
+pheatmap(t(outbreak_recomb_evo_mat), 
+         col = c("white", "black"), 
+         annotation_row = recomb_names, 
+         annotation_colors = colors_recomb,
+         cluster_rows = F,
+         fontsize_row = 5, 
+         fontsize_col = 5, 
+         show_colnames = F, 
+         show_rownames = F, 
+         #filename = "viz/heatmap_outbreaktypes_recombinants_nocluster.png",
+         legend = F, 
+         treeheight_col = 0,
+         width = 8, 
+         height = 4)
+
+outbreak_recomb_evo %>% 
+  melt() %>% 
+  ggplot(aes(x = reorder(DBLa_type, value), y = variable, fill = factor(value))) + 
+    geom_tile(color = "grey") +
+    scale_fill_manual(values = c("0" = "white", "1" = "black"),
+                      labels = c("absence", "presence")) +
+    theme(axis.text.x = element_blank()) +
+    #theme_cowplot() +
+    labs(x = "varcode1 DBLα types (N=47)",
+         y = "",
+         fill = "")
+``` 
+
+```{r}
+outbreak_evohistory <- varcode_matrixSAM_final %>% as.data.frame() %>% 
+                            rownames_to_column("DBLa_type") %>%  
+                            select(DBLa_type, `varcode1 (N=47)`, `Colombia (N=112)`, `Peru (N=157)`, `Venezuela (N=176)`, `French Guiana (N=249)`) %>% 
+                            filter(`varcode1 (N=47)` > 0) %>% 
+                            mutate(sum = `varcode1 (N=47)` + `Colombia (N=112)` + `Peru (N=157)` + `Venezuela (N=176)` + `French Guiana (N=249)`) %>% 
+                            rename_at("varcode1 (N=47)", ~"varcode1") %>% 
+                            rename_at("Colombia (N=112)", ~"Colombia") %>% 
+                            rename_at("Peru (N=157)", ~"Peru") %>% 
+                            rename_at("French Guiana (N=249)", ~"French Guiana") %>% 
+                            rename_at("Venezuela (N=176)", ~"Venezuela")
+
+outbreak_evohistory %>% group_by(sum) %>% tally()
+
+#varcode_matrixSAM_final %>% as.data.frame() %>% rownames_to_column("DBLa_type") %>% filter(DBLa_type %in% subset(outbreak_evohistory, sum == 1)$DBLa_type) %>% View()
+
+outbreak_evohistory_mat <- outbreak_evohistory %>% select(-sum) %>% column_to_rownames("DBLa_type") %>% as.matrix()
+
+evo_names <- data.frame(`.` = c("varcode1", "Colombia", "French Guiana", "Peru", "Venezuela"),
+                        location = c("varcode1","Colombia", "French Guiana", "Peru", "Venezuela")) %>% 
+             column_to_rownames("location")
+
+colors_evo <- list(`.` = c(`varcode1` = "#fb8072", `Colombia` = "#fdb462", `French Guiana` = "#a6d854", `Peru` = "#66c2a5", `Venezuela` = "#bebada"))
+
+#heatmap_outbreak_SAm <- 
+pheatmap(t(outbreak_evohistory_mat), 
+         col = c("white", "black"), 
+         annotation_row = evo_names, 
+         annotation_colors = colors_evo,
+         fontsize_row = 5, 
+         fontsize_col = 5, 
+         show_colnames = F, 
+         show_rownames = F, 
+         #filename = "viz/heatmap_outbreaktypes.png",
+         legend = F, 
+         treeheight_col = 0,
+         width = 8, 
+         height = 4)
+
+pheatmap(t(outbreak_evohistory_mat), 
+         col = c("white", "black"), 
+         annotation_row = evo_names, 
+         annotation_colors = colors_evo,
+         cluster_rows = F, 
+         cluster_cols = F, 
+         fontsize_row = 5, 
+         fontsize_col = 5, 
+         show_colnames = F, 
+         show_rownames = F, 
+         #filename = "viz/heatmap_outbreaktypes_nocluster.png",
+         legend = F, 
+         treeheight_col = 0,
+         width = 8, 
+         height = 4)
+
+outbreak_evohistory %>% select(-sum) %>% 
+  melt() %>% 
+  ggplot(aes(x = reorder(DBLa_type, value), y = variable, fill = factor(value))) + 
+    geom_tile(color = "grey") +
+    scale_fill_manual(values = c("0" = "white", "1" = "black"),
+                      labels = c("absence", "presence")) +
+    theme(axis.text.x = element_blank()) +
+    #theme_cowplot() +
+    labs(x = "varcode1 DBLα types (N=47)",
+         y = "",
+         fill = "")
+``` 
+
+#### Heatmap of *var*code1
+```{r}
+vc1_47types <- vc1_matrixSAM %>% as.data.frame() %>% 
+  rownames_to_column("DBLa_type") %>% 
+  filter(DBLa_type %in% outbreak_recomb_evo$DBLa_type)
+
+vc1_47types <- vc1_47types %>% left_join(select(outbreak_metadata, DBLa_type, freq), by = "DBLa_type") %>% arrange(desc(freq))
+
+vc1_matrix_47types <- vc1_47types %>% select(-freq) %>% column_to_rownames("DBLa_type") %>% as.matrix() 
+
+varcode1_list <- varcode_list %>% rownames_to_column("SampleID") %>% left_join(select(ecu_epi, SampleID, Case), by = "SampleID") %>% filter(SampleID %in% names(vc1_47types)) %>% column_to_rownames("Case") %>% select(-SampleID)
+
+vc1_matrix_47types <- t(vc1_matrix_47types)
+rownames(vc1_matrix_47types) <- rownames(varcode1_list)
+
+vc1_col <- list(varcode = c("varcode1" = "#fb9a99"))
+
+#heatmap_outbreakvc1 <- 
+pheatmap(vc1_matrix_47types, col = c("white", "black"),
+         annotation_row = varcode1_list, 
+         annotation_colors = vc1_col, 
+         fontsize_row = 5, fontsize_col = 5, 
+         cluster_rows = F, 
+         cluster_cols = F, 
+         legend = F, 
+         treeheight_col = 0, 
+         show_colnames = F,
+         show_rownames = T, 
+         #filename = "viz/heatmap_varcode1_nocluster.png",
+         width = 8, 
+         height = 4)
+
+vc1_47types %>% select(-freq) %>% 
+  melt(id = "DBLa_type") %>% 
+  rename_at("variable", ~"isolate") %>% 
+  left_join(select(ecu_epi, SampleID, Case), by = c("isolate" = "SampleID")) %>% 
+  mutate(Case2 = paste("EC",sprintf("%02s", substr(Case,3,5)))) %>% 
+  ggplot(aes(x = reorder(DBLa_type, desc(value)), y = Case2, fill = factor(value))) + 
+    geom_tile(color = "grey") +
+    scale_fill_manual(values = c("0" = "white", "1" = "black"),
+                      labels = c("absence", "presence")) +
+    theme(axis.text.x = element_blank()) +
+    #theme_cowplot() +
+    labs(x = "varcode1 DBLα types (N=47)",
+         y = "Case",
+         fill = "")
+```
+
+#### Conservation of outbreak types
+```{r}
+# frequency of types in outbreak clone
+outbreak_metadata %>% summarise(min = min(freq), mean = mean(freq), median = median(freq), max = max(freq), sum = sum(freq)) 
+
+#sum of observations of types in outbreak clone
+outbreak_metadata %>% filter(freq > 1) %>% summarise(sum = sum(freq)) 
+
+# frequency of types in outbreak clone excluding singletons 
+outbreak_metadata %>% filter(freq > 1) %>% summarise(min = min(freq), mean = mean(freq), median = median(freq), max = max(freq), sum = sum(freq)) 
+
+# frequency of types in outbreak clone excluding low freq types 
+outbreak_metadata %>% filter(freq > 4) %>% summarise(min = min(freq), mean = mean(freq), median = median(freq), max = max(freq), sum = sum(freq))
+
+#frequency of outbreak types in recombinant varcodes
+typefreq_outbreak_recomb <- outbreak_metadata %>% left_join(vc3_matrixSAM %>% 
+                                                              rowSums() %>% 
+                                                              as.data.frame() %>% 
+                                                              rename_at(".", ~ "freq_vc3") %>% 
+                                                              rownames_to_column("DBLa_type"), 
+                                                            by = "DBLa_type")
+
+typefreq_outbreak_recomb <- typefreq_outbreak_recomb %>% left_join(vc4_matrixSAM %>% 
+                                                                     as.data.frame() %>% 
+                                                                     rename_at(".", ~ "freq_vc4") %>% 
+                                                                     rownames_to_column("DBLa_type"), 
+                                                                   by = "DBLa_type")
+
+typefreq_outbreak_recomb <- typefreq_outbreak_recomb %>% left_join(vc6_matrixSAM %>% 
+                                                                     rowSums() %>% 
+                                                                     as.data.frame() %>% 
+                                                                     rename_at(".", ~ "freq_vc6") %>% 
+                                                                     rownames_to_column("DBLa_type"), 
+                                                                   by = "DBLa_type")
+
+typefreq_outbreak_recomb <- typefreq_outbreak_recomb %>% left_join(vc7_matrixSAM %>% 
+                                                                     rowSums() %>% 
+                                                                     as.data.frame() %>% 
+                                                                     rename_at(".", ~ "freq_vc7") %>% 
+                                                                     rownames_to_column("DBLa_type"), 
+                                                                   by = "DBLa_type")
+
+typefreq_outbreak_recomb <- typefreq_outbreak_recomb %>% mutate(freq_recomb = freq_vc3 + freq_vc4 + freq_vc6 + freq_vc7)
+
+#frequency of outbreak types in recombinant varcodes (3,4,6,7)
+typefreq_outbreak_recomb %>% summarise(min = min(freq_recomb), mean = mean(freq_recomb), median = median(freq_recomb), max = max(freq_recomb), sum = sum(freq_recomb)) 
+
+#how many of the 47 DBLa types were identified in the recombinants?
+typefreq_outbreak_recomb %>% filter(freq_recomb > 0) %>% nrow()
+
+#how many of the 47 DBLa types were identified in each recombinant? (and proportion)
+typefreq_outbreak_recomb %>% filter(freq_vc3 > 0) %>% nrow() 
+27/47
+typefreq_outbreak_recomb %>% filter(freq_vc4 > 0) %>% nrow() 
+26/47
+typefreq_outbreak_recomb %>% filter(freq_vc6 > 0) %>% nrow() 
+17/47
+typefreq_outbreak_recomb %>% filter(freq_vc7 > 0) %>% nrow() 
+26/47
+```
+
+#### Conservation of Ecuadorian types
+```{r}
+typefreq_ecu <- binary_ecu %>% column_to_rownames("DBLa_type") %>% rowSums() %>% as.data.frame() %>% rownames_to_column("DBLa_type") %>% rename_at(".", ~"freq_ecu")
+
+typefreq_all <- binary_all %>% column_to_rownames("DBLa_type") %>% rowSums() %>% as.data.frame() %>% rownames_to_column("DBLa_type") %>% rename_at(".", ~"freq_all")
+
+typefreq_conservation <- typefreq_ecu %>% left_join(typefreq_all, by = "DBLa_type")
+typefreq_conservation <- typefreq_conservation %>% mutate(freq_continent = freq_all - freq_ecu)
+
+#how many independent observations of Ecuadorian types in South America? 2130
+typefreq_conservation %>% filter(freq_continent > 0) %>% summarise(sum = sum(freq_continent))
+
+#number of singletons in Ecu that are seen in South America
+typefreq_conservation %>% filter(freq_ecu == 1) %>% n_distinct()
+typefreq_conservation %>% filter(freq_ecu == 1 & freq_continent > 0) %>% n_distinct()
+
+ecutypefreq_plot <- typefreq_conservation %>% 
+  ggplot(aes(x = reorder(DBLa_type, freq_ecu), 
+             y = freq_continent, 
+             color = cut(freq_ecu, c(0, 1, 10, 20, 30, 40, 50, 60)))) +
+    geom_point() +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    scale_color_brewer(palette = "Dark2") +
+    labs(x = "Ecuadorian DBLα types (N=195)",
+         y = "Frequency in South America (N=128 isolates)",
+         color = "Frequency in Ecuador") +
+    theme_cowplot() +
+    background_grid(major = "y") +
+    theme(axis.text.x = element_blank()) 
+
+save_plot("viz/ecutypes_conservation_freq.png", ecutypefreq_plot, base_width = 10, base_height = 6)
+ecutypefreq_plot
+```
+
+
+## Neighbor-Joining Tree Analysis
+#### South America
+Now I will use the `ape` and `ggtree` package to create an unrooted neighbor-joining tree. We will use 1-GS to represent genetic distance (i.e. PTD as in [Rougeron et al 2017](https://onlinelibrary.wiley.com/doi/full/10.1002/ece3.3425)). Therefore, a value of 0 would indicate identical repertoires, i.e. 0 genetic distance from each other. For future reference I used this [tutorial](https://bioconductor.org/packages/release/bioc/vignettes/ggtree/inst/doc/treeManipulation.html). 
+```{r NJtree SAm}
+SAm_tree_GS <- nj(as.dist(1 - genSim_all))
+SAm_tree_GS <- ladderize(SAm_tree_GS)
+
+groupInfo <- all_epi %>% select(SampleID, Location) %>% group_by(Location) %>% do(taxa_list = .$SampleID)
+groups <- lapply(groupInfo$taxa_list, as.vector)
+names(groups) <- groupInfo$Location
+
+SAm_tree_GS <- groupOTU(SAm_tree_GS, groups)
+
+SAm_cols <- c("#fdb462", "#fb8072", "#a6d854", "#66c2a5", "#bebada")
+names(SAm_cols) <- names(groups)
+
+SAm_NJtree <- ggtree(SAm_tree_GS, aes(color = group), branch.length = "none", layout = "circular") +
+  scale_color_manual(values = SAm_cols,
+                     labels = names(SAm_cols)) +
+  geom_tippoint(size = 1) +
+  theme(legend.title = element_blank())
+
+save_plot("viz/SAm_NJtree.png", SAm_NJtree)
+SAm_NJtree
+```
+
+## Epidemiology Analysis
+Now we want to characterize the epidemiology surrounding the outbreak cases and those post-outbreak. Are there any particular risk factors (location, age, sex)? Undoubtedly, location will be a risk factor, but let's quantify this. To explore the demographics of the individuals harboring cases we focus on two broad stratification groups: 
+1.  Outbreak cases (N=30)
+2.  Non-outbreak cases (N=28).
+
+We also focus on the following stratification groups based on our *var*code genetic data:
+1. Cases caused by outbreak clone (*var*code1 in 2013)
+2. Cases caused by *var*code1 **after** the outbreak (2014 or 2015)
+3. Cases caused by recombinants of *var*code1 
+4. Cases caused by different *var*codes.
+
+### What are the demographic characteristics of the 50 study participants with epi data?
+*Note* we don't have age and sex data for `r ecu_epi %>% filter(is.na(Age) & is.na(Sex)) %>% tally() %>% as.integer()` participants.
+```{r}
+ecu_epi %>% filter(!is.na(Age) & !is.na(Sex)) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age)) 
+ecu_epi %>% filter(!is.na(Age) & !is.na(Sex)) %>% group_by(Sex) %>% tally()  
+```
+
+### What are the demographic characteristics of individuals with *P. falciparum* cases during the outbreak?
+```{r} 
+ecu_epi %>% filter(Year== "2013") %>% group_by(Sex) %>% tally() 
+
+ecu_epi %>% filter(Year == "2013", !is.na(Age)) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age)) 
+ecu_epi %>% filter(Year == "2013", !is.na(Age)) %>% group_by(Sex) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age))  
+```
+The summary statistics for the ages of individuals with cases during the outbreak is:
+`r knitr::kable(ecu_epi %>% filter(Year == "2013", !is.na(Age)) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age))) %>% kable_styling()`
+
+The summary statistics for the ages of individuals with cases during the outbreak, stratified by sex is:
+`r knitr::kable(ecu_epi %>% filter(Year == "2013", !is.na(Age)) %>% group_by(Sex) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age))) %>%  kable_styling()`
+
+### Was there a significant difference in the distribution of ages of males or females with cases during the outbreak?
+```{r}
+ecu_epi %>% filter(Year == "2013", !is.na(Age)) %>% 
+  ggplot(aes(x = Sex, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "wilcox.test", paired = F)
+
+
+wilcox.test(Age ~ Sex, data = ecu_epi %>% filter(Outbreak == "Outbreak2013", !is.na(Age)), exact = F, paired = F)
+```
+There was no significant difference in the ages of males or females who had *P. falciparum* cases during the outbreak (p = 0.38). 
+
+### What are the demographic characteristics of individuals with *P. falciparum* cases during and after the outbreak?
+```{r}
+ecu_epi %>% group_by(OutbreakBinary) %>% tally() 
+ecu_epi %>% group_by(OutbreakBinary, Sex) %>% tally()  
+ecu_epi %>% group_by(OutbreakBinary, is.na(Age)) %>% tally() 
+ecu_epi %>% filter(!is.na(Sex) & !is.na(Age)) %>% group_by(OutbreakBinary) %>% tally() 
+ecu_epi %>% filter(!is.na(Age)) %>% group_by(OutbreakBinary) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age)) 
+ecu_epi %>% filter(!is.na(Age)) %>% group_by(OutbreakBinary, Sex) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age)) 
+```
+We have data for age and sex for the following participants: `r knitr::kable(ecu_epi %>% filter(!is.na(Sex) & !is.na(Age)) %>% group_by(OutbreakBinary) %>% tally()) %>% kable_styling()` 
+
+The summary statistics for the ages of individuals with cases during and after the outbreak is: `r knitr::kable(ecu_epi %>% filter(!is.na(Age)) %>% group_by(OutbreakBinary) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age))) %>% kable_styling()` 
+
+The summary statistics for the ages of individuals with cases during and after the outbreak, stratified by sex is: `r knitr::kable(ecu_epi %>% filter(!is.na(Age)) %>% group_by(OutbreakBinary, Sex) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age))) %>% kable_styling()` 
+
+### Was there a significant difference in the ages of individuals with *P. falciparum* cases during and after the outbreak?
+```{r}
+ecu_epi %>% filter(!is.na(Age)) %>% 
+  ggplot(aes(x = OutbreakBinary, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "wilcox.test", paired = F)
+
+wilcox.test(Age ~ OutbreakBinary, data = ecu_epi %>% filter(!is.na(Age)), exact = F, paired = F)
+```
+There was no significant difference in the ages of individuals who had *P. falciparum* cases during or after the outbreak (p = 0.39).
+
+### Was there a significant difference in the ages of males or females with *P. falciparum* cases after the outbreak?
+```{r}
+ecu_epi %>% filter(OutbreakBinary == "NotOutbreak2013", !is.na(Age)) %>% 
+  ggplot(aes(x = Sex, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "wilcox.test", paired = F)
+
+wilcox.test(Age ~ Sex, data = ecu_epi %>% filter(OutbreakBinary == "NotOutbreak2013", !is.na(Age)), exact = F, paired = F)
+```
+There was no significant difference in the ages of males or females who had *P. falciparum* cases after the outbreak (p = 0.77).
+
+### Was there a significant difference in the ages of males or females with *P. falciparum* cases during or after the outbreak?
+```{r}
+ecu_epi %>% filter(!is.na(Age)) %>% 
+  ggplot(aes(x = Sex, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "wilcox.test", paired = F)
+
+wilcox.test(Age ~ Sex, data = ecu_epi %>% filter(!is.na(Age)), exact = F, paired = F)
+```
+There was no significant difference in the ages of males or females who had *P. falciparum* cases during or after the outbreak (p = 0.50).
+
+### Was there a significant difference in the ages of individuals with *P. falciparum* cases caused by the *var*code1, a recombinant of *var*code1 or a different *var*code in 2013, 2014 and 2015?
+```{r}
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant) %>% tally()
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age)) 
+
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age)) %>% 
+  ggplot(aes(x = OutbreakRecombinant, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "kruskal.test", paired = F)
+```
+There was no significant difference in the ages of individuals during/after the outbreak with clinical episodes caused by the outbreak *var*code, a recombinant or a different *var*code (p = 0.95, Kruskal-Wallis test). 
+
+The summary statistics for the ages of these individuals after the outbreak is: `r knitr::kable(ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant) %>% summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age))) %>% kable_styling()` 
+
+### Was there a significant difference in the proportion of males and females with *P. falciparum* cases caused by the *var*code1, a recombinant of *var*code1 or a different *var*code in 2014 and 2015?
+```{r}
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant) %>% tally()
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant, Sex) %>% tally()
+
+x <- matrix(c(3, 4, 4, 7), nrow = 2)
+y <- matrix(c(3, 4, 1, 2), nrow = 2)
+z <- matrix(c(4, 7, 1, 2), nrow = 2)
+
+chisq.test(x, correct = F)
+chisq.test(y, correct = F)
+chisq.test(z, correct = F)
+
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant, Sex) %>% tally() %>%
+  ggplot(aes(x = OutbreakRecombinant)) + geom_bar(aes(y = n, fill = Sex), stat = "identity", position = "fill") 
+```
+
+```{r}
+ecu_epi %>% filter(!is.na(Age)) %>% 
+  ggplot(aes(x = OutbreakBinary, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "wilcox.test", paired = F)
+
+ecu_epi %>% filter(!is.na(Age)) %>% 
+  ggplot(aes(x = OutbreakBinary, y = Age)) + geom_boxplot() + geom_point() + facet_wrap(~Sex) + stat_compare_means(method = "wilcox.test", paired = F)
+
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age)) %>% 
+  ggplot(aes(x = OutbreakRecombinant, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "kruskal.test", paired = F)
+
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age)) %>% 
+  ggplot(aes(x = OutbreakRecombinant, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "kruskal.test", paired = F) + facet_wrap(~Sex)
+```

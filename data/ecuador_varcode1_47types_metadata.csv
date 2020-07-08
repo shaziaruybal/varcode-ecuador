@@ -1,0 +1,48 @@
+﻿DBLa_type,freq,other_varcode,iso_notes,south_america,outlier
+M00123:210:000000000-BTDTV:1:1103:16191:18247,34,varcode2/varcode3/varcode4/varcode5/varcode7/varcode8/varcode9,,all countries,no
+M00123:210:000000000-BTDTV:1:2103:6764:11299,36,varcode3/varcode4/varcode5/varcode6/varcode7/varcode8/varcode9,,ecu/col/per/ven,no
+M00123:211:000000000-BYH2N:1:1114:7575:23737,35,varcode2/varcode3/varcode4/varcode6/varcode7/varcode8/varcode9,,ecu/col/per/ven,no
+M00123:211:000000000-BYH2N:1:1115:23610:21855,36,varcode2/varcode3/varcode4/varcode6/varcode7/varcode8,,ecu/col/per,no
+M00123:210:000000000-BTDTV:1:2104:5314:10310,35,varcode2/varcode3/varcode4/varcode6/varcode7,,ecu/col/per,no
+M00123:210:000000000-BTDTV:1:1104:2955:13581,34,varcode2/varcode3/varcode4/varcode6/varcode7/varcode8,,ecu/col/per,no
+M00123:211:000000000-BYH2N:1:2117:21308:19287,34,varcode2/varcode3/varcode4/varcode6/varcode7/varcode8,,ecu/per/ven,no
+M00123:211:000000000-BYH2N:1:1109:24945:11570,35,varcode3/varcode4/varcode9,,ecu/col/per/ven,no
+V9.c13f15s22,35,varcode3/varcode4/varcode9,,ecu/col/per/ven,no
+M00123:210:000000000-BTDTV:1:2107:10599:17357,32,varcode2/varcode3/varcode4/varcode6/varcode7,,ecu/col/per,no
+M00123:210:000000000-BTDTV:1:1114:14737:8935,36,varcode2/varcode3/varcode4/varcode6/varcode7,,ecu/per,no
+M00123:211:000000000-BYH2N:1:1109:4149:11936,34,varcode3/varcode4/varcode6/varcode7,,ecu/per,no
+M00123:210:000000000-BTDTV:1:1117:25014:11472,32,varcode3/varcode6/varcode7,,ecu/per,no
+M00123:211:000000000-BYH2N:1:1106:26301:11960,35,varcode3/varcode4/varcode6/varcode7,,ecu/per,no
+P64.c16f11s19,36,varcode6/varcode7,,ecu/per,no
+M00123:210:000000000-BTDTV:1:2110:7883:10088,34,varcode3/varcode4/varcode7,,ecu/per,no
+M00123:210:000000000-BTDTV:1:2118:5933:11541,34,varcode3/varcode4/varcode7,,ecu/per,no
+M00123:210:000000000-BTDTV:1:1101:4844:14664,34,varcode3/varcode4/varcode8,,ecu/per,no
+M00123:210:000000000-BTDTV:1:1108:13482:14606,35,varcode3/varcode4/varcode9,,ecu/per,no
+M00123:211:000000000-BYH2N:1:1117:25151:10610,36,varcode3/varcode4/varcode6/varcode7,,ecu/col/per,no
+M00123:210:000000000-BTDTV:1:2112:7695:13403,34,varcode6,,ecu/fre/ven,no
+M00123:211:000000000-BYH2N:1:1117:23082:15265,36,varcode3/varcode9,,ecu/col,no
+M00123:211:000000000-BYH2N:1:2115:8900:15244,35,varcode7,,ecu/per/ven,no
+M00123:210:000000000-BTDTV:1:1101:18748:17774,34,varcode3/varcode9,,ecu/col/per,no
+P64.c25f9s10,34,varcode4/varcode7,,ecu/per,no
+M00123:211:000000000-BYH2N:1:1101:10890:8741,34,varcode3/varcode9,,ecu/col/per,no
+M00123:210:000000000-BTDTV:1:2116:12993:2934,35,varcode3/varcode9,,ecu/col,no
+M00123:210:000000000-BTDTV:1:2119:23595:19244,30,varcode3/varcode7,,ecu,no
+M00123:210:000000000-BTDTV:1:1103:15433:13444,35,varcode4/varcode6,,ecu,no
+M00123:210:000000000-BTDTV:1:1103:12720:7885,34,varcode3,,ecu,no
+M00123:211:000000000-BYH2N:1:1105:13874:13727,28,varcode7,,ecu,no
+M00123:211:000000000-BYH2N:1:1112:13610:21315,34,varcode4,,ecu/per,no
+M00123:211:000000000-BYH2N:1:2116:10588:6831,30,varcode4/varcode6/varcode7,,ecu/per,no
+M00123:211:000000000-BYH2N:1:1112:17735:20548,34,varcode4,,ecu,no
+M00123:211:000000000-BYH2N:1:2119:14675:13408,34,varcode4,,ecu,no
+M00123:211:000000000-BYH2N:1:2110:12121:8853,34,varcode1-majority,,ecu,no
+M00123:210:000000000-BTDTV:1:1119:19927:14911,33,varcode1-majority,,ecu,no
+M00123:211:000000000-BYH2N:1:2115:15081:3331,6,varcode3/varcode4/varcode7/P64,"Seen in isolates: ECPf035, ECPf042, ECPf047, ECPf053, ECPf056, ECPf057, ECPf058, ECPf059, ECPf060, ECPf064, ECPf066, ECPf067, P64",ecu/per,yes
+M00123:211:000000000-BYH2N:1:1112:21251:14588,6,varcode3/varcode6/varcode7/P64,"Seen in isolates: ECPf051, ECPf053, ECPF056, ECPf057, ECPf058, ECPf059, ECPf060, ECPf063, ECPf064, ECPf066, ECPf067, ECPf072, P64",ecu/per,yes
+M00123:211:000000000-BYH2N:1:1116:13585:18683,6,varcode3/varcode7,"Seen in isolates: ECPf035, ECPf042, ECPf053, ECPf056, ECPf057, ECPf058, ECPf059, ECPf060, ECPf064, ECPf066, ECPf067",ecu,yes
+M00123:211:000000000-BYH2N:1:1104:24560:4322,5,varcode4,Seen in isolate: ECPf047,ecu,yes
+M00123:210:000000000-BTDTV:1:1105:8395:7614,1,varcode1-singleton,singleton in dataset,ecu,yes
+M00123:210:000000000-BTDTV:1:1102:24161:3858,1,varcode1-singleton,singleton in dataset,ecu,yes
+M00123:210:000000000-BTDTV:1:2108:8944:10442,1,varcode1-singleton,singleton in dataset,ecu,yes
+M00123:210:000000000-BTDTV:1:2107:15441:14980,1,varcode1-singleton,singleton in dataset,ecu,yes
+M00123:211:000000000-BYH2N:1:1119:16159:8332,1,varcode1-singleton,singleton in dataset,ecu,yes
+M00123:211:000000000-BYH2N:1:1114:19949:9214,1,varcode1-singleton,singleton in dataset,ecu,yes
