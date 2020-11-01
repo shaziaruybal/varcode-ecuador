@@ -1,0 +1,93 @@
+---
+title: "Ecuador sequencing data"
+date: "`r Sys.Date()`"
+author: "Shazia Ruybal-Pesantez"
+output: 
+  html_notebook:
+    code_folding: hide 
+    theme: cosmo
+---
+
+```{r setup, echo = F}
+library(readxl)
+library(dplyr)
+library(stringr)
+library(janitor)
+library(DT)
+library(kableExtra)
+library(DiagrammeR)
+```
+
+***
+### Sequencing summary log
+***
+
+Need to remove Ghana isolates and only keep Ecuador.
+```{r}
+data_pool1 <- read_xls("data/ghanaEC_survey_6_log_summary.xls", sheet = 1)
+data_pool2 <- read_xls("data/ghanaEC_survey_6_log_summary.xls", sheet = 2)
+data_pool3 <- read_xls("data/ghanaEC_survey_6_log_summary.xls", sheet = 3)
+data_pool4 <- read_xls("data/ghanaEC_survey_6_log_summary.xls", sheet = 4)
+
+data <- rbind(data_pool1, data_pool2, data_pool3, data_pool4)
+data <- data %>% filter(str_detect(Sample, "ECPf"))
+```
+
+***
+### Data for each isolate
+***
+```{r}
+data %>% 
+    datatable(extensions = "Buttons", 
+  #           options = list(dom = "Bfrtip", 
+  #                          buttons = (list(
+  #                            "copy", list(
+  #                              extend = "collection", 
+  #                              buttons = c("csv", "excel"), 
+  #                              text = "Download")))), 
+            rownames = F, 
+            filter = "top",
+            style = "bootstrap")
+```
+
+***
+### Summary all `r nrow(data)` isolates
+***
+
+```{r}
+totals <- data %>% adorn_totals() %>% filter(Sample == "Total") 
+totals %>% kable() %>% kable_styling(full_width = F)
+```
+
+***
+### Flowchart
+***
+
+```{r}
+grViz("digraph flowchart {
+      # node definitions with substituted label text
+      node [fontname = Helvetica, shape = rectangle]        
+      tab1 [label = '@@1']
+      tab2 [label = '@@2']
+      tab3 [label = '@@3']
+      tab4 [label = '@@4']
+      tab5 [label = '@@5']
+      tab6 [label = '@@6']
+
+      # edge definitions with the node IDs
+      tab1 -> tab2;
+      tab2 -> tab3;
+      tab3 -> tab4;
+      tab4 -> tab5;
+      tab5 -> tab6
+      }
+      
+      [1]: paste0('Raw illumina reads (n = ', totals$PreMerge, ')')
+      [2]: paste0('Assembled and merged reads (n = ', totals$Merged, ')')
+      [3]: paste0('Remove chimeras and low quality reads (n = ', totals$Merged-totals$Filtered-totals$Chimeric, ')')
+      [4]: paste0('Cluster reads at 96% sequence identity (n = ', totals$Centroids, ')')
+      [5]: paste0('Remove clusters with low support reads  (n = ', totals$Centroidswithsupport, ')')
+      [6]: paste0('Remove non-DBLα sequences, final cleaned DBLα sequences  (n = ', totals$Aftercontaminantfiltering, ')')
+      ")
+```
+

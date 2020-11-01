@@ -1419,7 +1419,7 @@ There was no significant difference in the ages of individuals who had *P. falci
 
 ### Was there a significant difference in the ages of males or females with *P. falciparum* cases after the outbreak?
 ```{r}
-ecu_epi %>% filter(OutbreakBinary == "NotOutbreak2013", !is.na(Age)) %>% 
+ecu_epi %>% filter(OutbreakBinary == "NotOutbreak2013", Year>2013, !is.na(Age)) %>% 
   ggplot(aes(x = Sex, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "wilcox.test", paired = F)
 
 wilcox.test(Age ~ Sex, data = ecu_epi %>% filter(OutbreakBinary == "NotOutbreak2013", !is.na(Age)), exact = F, paired = F)
@@ -1449,8 +1449,8 @@ The summary statistics for the ages of these individuals after the outbreak is: 
 
 ### Was there a significant difference in the proportion of males and females with *P. falciparum* cases caused by the *var*code1, a recombinant of *var*code1 or a different *var*code in 2014 and 2015?
 ```{r}
-ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant) %>% tally()
-ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant, Sex) %>% tally()
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", Year > 2013, !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant) %>% tally()
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", Year > 2013, !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant, Sex) %>% tally()
 
 x <- matrix(c(3, 4, 4, 7), nrow = 2)
 y <- matrix(c(3, 4, 1, 2), nrow = 2)
@@ -1460,7 +1460,7 @@ chisq.test(x, correct = F)
 chisq.test(y, correct = F)
 chisq.test(z, correct = F)
 
-ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant, Sex) %>% tally() %>%
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", Year > 2013, !is.na(Age) & !is.na(Sex)) %>% group_by(OutbreakRecombinant, Sex) %>% tally() %>%
   ggplot(aes(x = OutbreakRecombinant)) + geom_bar(aes(y = n, fill = Sex), stat = "identity", position = "fill") 
 ```
 
@@ -1472,8 +1472,21 @@ ecu_epi %>% filter(!is.na(Age)) %>%
   ggplot(aes(x = OutbreakBinary, y = Age)) + geom_boxplot() + geom_point() + facet_wrap(~Sex) + stat_compare_means(method = "wilcox.test", paired = F)
 
 ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age)) %>% 
-  ggplot(aes(x = OutbreakRecombinant, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "kruskal.test", paired = F)
-
-ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", !is.na(Age)) %>% 
   ggplot(aes(x = OutbreakRecombinant, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "kruskal.test", paired = F) + facet_wrap(~Sex)
 ```
+
+## For revision
+```{r}
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", Year > 2013, !is.na(Age)) %>% group_by(OutbreakRecombinant) %>% dplyr::summarize(min = min(Age), med = median(Age), avg = mean(Age), max = max(Age))
+
+ecu_epi %>% filter(OutbreakBinary != "Outbreak2013", Year > 2013, !is.na(Age)) %>% 
+  ggplot(aes(x = OutbreakRecombinant, y = Age)) + geom_boxplot() + geom_point() + stat_compare_means(method = "kruskal.test", paired = F)
+```
+
+```{r}
+ecu_epi %>% tabyl(OutbreakRecombinant)
+ecu_epi %>% filter(Year > 2013) %>% tabyl(OutbreakRecombinant)
+ecu_epi %>% filter(Year > 2013) %>% tabyl(OutbreakRecombinant, Year) 
+ecu_epi %>% filter(Year > 2013) %>% tabyl(OutbreakRecombinant, Year) %>% adorn_percentages("col") %>% adorn_pct_formatting(1)
+```
+
