@@ -21,6 +21,8 @@ library(janitor)
 library(patchwork)
 library(kableExtra)
 library(cowplot)
+
+library(here)
 ```
 
 ## Background
@@ -47,7 +49,7 @@ For each (na,nb,nab) triplet, the posterior samples are triplets (s, Ra, Rb) whe
 * `x_upper_95hpdi`: the upper cutoff value for the 95% highest posterior density interval for x=2s/(Ra+Rb)
 
 ```{r}
-bayesian_orig <- read.csv("data/ecuador_bayesian_results_v2_june10.csv") 
+bayesian_orig <- read.csv(here::here("data", "ecuador_bayesian_results_v2_june10.csv"))
 ```
 
 ## Analysis

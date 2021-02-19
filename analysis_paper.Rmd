@@ -64,6 +64,8 @@ library(patchwork)
 library(janitor)
 library(lubridate)
 library(scatterpie)
+
+library(here)
 ```
 
 Load our functions.
@@ -115,12 +117,12 @@ GSmatrixToTable_VC <- function(x){
 
 ### Load data
 ```{r}
-ups <- fread("data/ecuador_ups_classification_final.csv", data.table = F, )
-binary_all <- fread("data/ecuador_SAm_binary_matrix_final.csv", data.table = F)
-binary_ecu <- fread("data/ecuador_binary_matrix_final.csv", data.table = F)
-microsat_ecu <- fread("data/ecuador_binary_microsat_final.csv", data.table = F)
-ecu_epi <- fread("data/ecuador_epi.csv", data.table = F)
-outbreak_metadata <- read.csv("data/ecuador_varcode1_47types_metadata.csv")
+ups <- fread(here::here("data", "ecuador_ups_classification_final.csv"), data.table = F, )
+binary_all <- fread(here::here("data", "ecuador_SAm_binary_matrix_final.csv"), data.table = F)
+binary_ecu <- fread(here::here("data", "ecuador_binary_matrix_final.csv"), data.table = F)
+microsat_ecu <- fread(here::here("data", "ecuador_binary_microsat_final.csv"), data.table = F)
+ecu_epi <- fread(here::here("data", "ecuador_epi.csv"), data.table = F)
+outbreak_metadata <- read.csv(here::here("data", "ecuador_varcode1_47types_metadata.csv"))
 ```
 
 ### Make matrices
