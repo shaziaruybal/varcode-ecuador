@@ -1,2 +1,2 @@
 # varcode-ecuador
-This repository stores the data and code for the manuscript entitled "*Plasmodium falciparum* parasites with recombinant *var* repertoires sustained disease transmission after an outbreak in Ecuador, an E-2020 country" by Ruybal-Pesántez *et al*
+This repository stores the data and code for the manuscript entitled "Clinical malaria incidence following an outbreak in Ecuador was predominantly associated with *Plasmodium falciparum* with recombinant variant antigen gene repertoires" by Ruybal-Pesántez *et al*
