@@ -1,0 +1,306 @@
+---
+title: "Supplementary Text 1"
+header-includes: |
+  \usepackage{fancyhdr}
+  \pagestyle{fancy}
+  \fancyhead[LO,LE]{Ruybal-Pesántez et al}
+  \fancyhead[RO,RE]{Supplementary Text 1}
+  \fancyfoot[CO,CE]{\thepage}
+  \usepackage[left]{lineno}
+  \linenumbers
+output:
+  bookdown::pdf_document2:
+    fig_caption: yes
+    number_sections: no
+    toc: no
+    df_print: kable
+    extra_dependencies: ["float"]
+    latex_engine: pdflatex
+  bookdown::html_document2:
+    theme: cosmo
+    df_print: paged
+    toc: yes
+    toc_depth: '4'
+    number_sections: no
+    toc_float: yes
+    code_folding: hide
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      warnings = FALSE, 
+                      message = FALSE)
+library(bookdown)
+library(here)
+library(tidyverse)
+library(data.table)
+library(kableExtra)
+library(janitor)
+```
+
+```{r load-data}
+hb3_data <- read.csv(here::here("data", "FINAL_HB3_Data_Binary_upsgroupings.csv"))
+data <- fread(here::here("data", "ecuador_SAm_binary_matrix_final.csv"), data.table = F)
+ups <- fread(here::here("data", "ups_classification_all.csv"), data.table = F)
+epi <- read.csv(here::here("data", "ecuador_epi.csv"))
+ecu_data <- read.csv(here::here("data", "ecuador_binary_matrix_final.csv"))
+vc1_data <- readRDS(here::here("data", "ecuador_varcode1_47types.rds"))
+```
+
+```{r data-curation}
+data <- data %>% left_join(ups, by = "DBLa_type")
+ecu_data <- ecu_data %>% left_join(ups, by = "DBLa_type")
+
+data_long <- data %>% 
+                pivot_longer(-c(DBLa_type, domain, `e-value`, ups), 
+                             names_to = "isolate", values_to = "presence") %>% 
+                mutate(country = case_when(grepl("^Col", isolate) ~ "colombia",
+                                           grepl("^EC", isolate) ~ "ecuador",
+                                           grepl("^G", isolate) ~ "french guiana",
+                                           grepl("^P", isolate) ~ "peru",
+                                           grepl("^V", isolate) ~ "venezuela"))
+
+hb3_data_byiso <- hb3_data %>% 
+                      rownames_to_column("DBLa_type") %>% 
+                      pivot_longer(PHB3.MID46.48.P1.apr13:HB3.MID2.2.P4.dec16, 
+                                   names_to = "isolate", 
+                                   values_to = "presence") %>% 
+                      group_by(isolate, Ups) %>% 
+                      tally(presence) %>% 
+                      ungroup() %>% 
+                      group_by(isolate) %>% 
+                      mutate(rep_size = sum(n),
+                             prop = n/rep_size)
+```
+
+As described in the Methods, the degenerate primers we use amplify the DBL$a$ domain of *var* genes. We performed an additional validation of our PCR (using these degenerate DBL$a$ primers) and sequencing methodology to understand the margin of error of detection of all DBL$a$ types in an isolate. DBL$a$ types were translated into amino acid sequences and classified as upsA or non-upsA, using the [classifyDBLalpha pipeline](http://github.com/Unimelb-Day-Lab/classifyDBLalpha) [@Ruybal-Pesántez2017] to examine whether the expected genomic proportions of upsA/non-upsA were obtained in each isolate.
+
+Given our study was conducted in South America, we used the Honduran laboratory reference strain HB3 as a benchmark for the expected number of total DBL$a$ types (i.e. repertoire size), as well as the proportion of upsA/non-upsA. Whole genome sequencing of HB3 has identified 44 *var* genes, with 8 upsA DBL$a$ types (defined by DBL$a$ domain 1), 34 non-upsA DBL$a$ types (DBL$a$ domains 0 and 2) and 2 upsE (*var2csa* genes, defined by DBLpam domains and do not have DBL$a$ domains) [@Rask2010c]. We independently verified this using 37 technical replicates of *var* DBL$a$ PCR amplification and illumina sequencing of our HB3 laboratory isolate. It is worth noting that since HB3 has two *var2csa* genes that do not have DBL$a$ domains, these will not be amplified by our degenerate primers, so we expect that only 42 of the *var* genes of HB3 could be amplified.
+
+### HB3 technical replicates
+
+From the data obtained from 37 HB3 technical replicates, we identified the expected repertoire sizes with a median of 39 DBL$a$ types (range: 36-41). A median of 7 upsA DBL$a$ types (range: 6-8) and a median of 33 non-upsA DBL$a$ types (range: 30-34) were identified (Figure \@ref(fig:number-ups-hb3)). The median genomic proportion of upsA DBL$a$ types was 17.5% (range: 15.4-19.5%) and 82.5% (range: 80.5-84.6%) for non-upsA DBL$a$ types (Figure \@ref(fig:prop-ups-hb3)). We found that of the `r nrow(hb3_data)` identified in the 37 technical replicates, 40 of them were consistently identified in the majority of replicate isolates (range 21 to 37 replicates). Of these 40 types, 7 were ups-A and 33 were non-upsA. All of these findings are in line with what is expected from whole genome sequencing data [@Rask2010c].
+
+```{r eval=F}
+hb3_data_byiso %>% 
+  mutate(Ups = case_when(Ups == "A" ~ "upsA",
+                         TRUE ~ "non-upsA"),
+         Ups = factor(Ups, levels = c("upsA", "non-upsA"))) %>% 
+  ggplot(aes(x= Ups, y = n, fill = Ups)) +
+    geom_jitter() +
+    geom_boxplot(alpha=0.3, outlier.shape = NA) +
+    scale_fill_manual(values = c("upsA" = "#253494", "non-upsA" = "#A1DAB4"),
+                      name = "") +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    labs(x = "",
+        y = "Number of types per isolate") +
+    theme_bw() 
+```
+
+```{r number-ups-hb3, fig.width=9, fig.height=3, fig.cap = "The distribution of the number of upsA and non-upsA types identified in each HB3 isolate repertoire."}
+hb3_data_byiso %>% 
+  mutate(Ups = case_when(Ups == "A" ~ "upsA",
+                         TRUE ~ "non-upsA"),
+         Ups = factor(Ups, levels = c("upsA", "non-upsA"))) %>% 
+  ggplot(aes(x = n, fill = Ups)) +
+    geom_bar() +
+    scale_fill_manual(values = c("upsA" = "#253494", "non-upsA" = "#A1DAB4"),
+                      name = "") +
+    facet_wrap(~Ups, scales = "free_x") +
+    labs(x = "Number of types per isolate",
+        y = "Number of isolates (N=37)") +
+    theme_bw() 
+```
+
+```{r prop-ups-hb3, fig.width=9, fig.height=3, fig.cap = "The proportion of upsA and non-upsA types identified in each HB3 isolate repertoire."}
+hb3_data_byiso %>% 
+  mutate(Ups = case_when(Ups == "A" ~ "upsA",
+                         TRUE ~ "non-upsA"),
+         Ups = factor(Ups, levels = c("upsA", "non-upsA"))) %>% 
+  ungroup() %>% 
+  mutate(replicate = rleid(isolate)) %>% 
+  ggplot(aes(x = factor(replicate), y = prop, fill = Ups)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("upsA" = "#253494", "non-upsA" = "#A1DAB4"),
+                      name = "") +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10),
+                       labels = scales::percent_format(1)) +
+    labs(x = "HB3 replicate",
+        y = "% types in HB3 isolate repertoire") +
+    theme_bw() 
+```
+
+### Field isolate genomic proportions of upsA and non-upsA DBL$a$ types
+
+```{r eval=F}
+data %>% 
+  tabyl(ups)
+
+ecu_data %>% 
+  tabyl(ups)
+```
+
+The 543 unique DBL$a$ types identified in the 186 South American *P. falciparum* isolates (N = 58 Ecuadorian P. falciparum isolates from this study, N = 128 previously published *P. falciparum* isolates from Colombia, French Guiana, Peru and Venezuela) were translated into amino acid sequences and classified as upsA or non-upsA, using the [classifyDBLalpha pipeline](http://github.com/Unimelb-Day-Lab/classifyDBLalpha) [@Ruybal-Pesántez2017]. There were 79 upsA and 464 non-upsA types.
+
+Looking first at the 195 types (26 upsA and 169 non-upsA) identified in Ecuadorian isolates, we obtained a median genomic proportion of upsA of 10.8% (range: 5.1-18.2%) and 89.2% (range: 81.8-94.9%) of non-upsA types for all isolate *var*codes (Figure \@ref(fig:ups-props-ecuador)).
+
+```{r eval=F}
+ecu_data %>% 
+  pivot_longer(-c(DBLa_type, domain, `e-value`, ups), 
+               names_to = "SampleID", 
+               values_to = "presence") %>% 
+  left_join(epi, by = "SampleID") %>% 
+  group_by(Case, id, ups, presence) %>% 
+  tally() %>% 
+  filter(presence == 1) %>% 
+  group_by(Case) %>% 
+  mutate(rep_size = sum(n)) %>% 
+  mutate(prop = n/rep_size) %>% 
+  group_by(ups) %>% 
+  dplyr::summarise(min = min(prop), 
+                   median = median(prop),
+                   mean = mean(prop),
+                   max = max(prop))
+```
+
+```{r ups-props-ecuador, fig.width=9, fig.height=3, fig.cap = "The proportion of upsA and non-upsA types in each isolate repertoire. The case numbers in the x-axis can be used to identify the clinical information of the participant in Table 1."}
+ecu_data %>% 
+  pivot_longer(-c(DBLa_type, domain, `e-value`, ups), 
+               names_to = "SampleID", 
+               values_to = "presence") %>% 
+  left_join(epi, by = "SampleID") %>% 
+  group_by(Case, id, ups, presence) %>% 
+  tally() %>% 
+  filter(presence == 1) %>% 
+  ggplot(aes(x = reorder(Case, id), y = n, fill = ups)) +
+    geom_bar(stat = "identity", position = "fill") +
+    scale_fill_manual(values = c("A" = "#253494", "BC" = "#A1DAB4"),
+                      labels = c("upsA", "non-upsA"),
+                      name = "") +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10),
+                       labels = scales::percent_format(1)) +
+    labs(x = "Case",
+         y = "% types in isolate repertoire") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r eval=F}
+# DBLa sharing by upsA/non-A
+ecu_data %>% 
+  pivot_longer(-c(DBLa_type, domain, `e-value`, ups), names_to = "SampleID", values_to = "presence") %>% 
+  left_join(epi, by = "SampleID") %>% 
+  ggplot(aes(x = rev(reorder(DBLa_type, presence)), y = reorder(Case, id))) +
+    geom_tile(aes(fill = factor(ups))) +
+    geom_tile(aes(fill = factor(presence))) +
+    scale_fill_manual(values = c("0" = "white", "1" = "transparent", "A" = "#253494", "BC" = "#A1DAB4"),
+                      labels = c("","", "upsA", "non-upsA"),
+                      name = "") + 
+    facet_grid(OutbreakRecombinant~., scales = "free_y") +
+    theme_bw() +
+    theme(axis.text.x = element_blank()) +
+    labs(x = "DBLα type",
+         y = "Case") 
+```
+
+To confirm the patterns we observed in Ecuadorian isolates, we also compared them to the other South American isolates. In the other South American isolate *var*codes the genomic proportions of upsA/non-upsA were similar, with a median proportion of upsA of 9-14% and 86-91% for non-upsA types (Table \@ref(tab:ups-props-sam-table)).
+
+```{r ups-props-sam-table}
+kable(data_long %>% 
+  group_by(country, isolate, ups) %>% 
+  tally(presence) %>% 
+  mutate(prop = round((n/sum(n)), 2)) %>% 
+  filter(ups == "A") %>% 
+  ungroup() %>% 
+  group_by(country) %>% 
+  mutate(country = str_to_title(country)) %>% 
+  dplyr::summarise(min = min(prop),
+                   median = round(median(prop), 2),
+                   mean = round(mean(prop), 2),
+                   max = max(prop)), 
+  caption = "The proportion of upsA types in South American isolates") %>% 
+  kable_styling(bootstrap_options = "striped")
+```
+
+With regards to the number of upsA identified in all the South American isolate *var*codes, we identified a median of 4-5 upsA types and 31-42.5 non-upsA types (Table \@ref(tab:num-upsA-sam-table)).
+
+```{r num-upsA-sam-table}
+kable(data_long %>% 
+  group_by(country, isolate, ups) %>% 
+  tally(presence) %>% 
+  filter(ups == "A") %>% 
+  ungroup() %>% 
+  group_by(country) %>% 
+  mutate(country = str_to_title(country)) %>% 
+  dplyr::summarise(min = min(n),
+                   median = median(n),
+                   mean = round(mean(n), 0),
+                   max = max(n)),
+  caption = "The number of upsA types identified in South American isolates") %>% 
+  kable_styling(bootstrap_options = "striped")
+```
+
+```{r ups-props-sam-plot, fig.width=10, fig.height=3, fig.cap="The proportion of upsA and non-upsA types in each isolate repertoire stratified by country."}
+data_long %>% 
+  group_by(country, isolate, ups) %>% 
+  mutate(country = str_to_title(country)) %>% 
+  tally(presence) %>% 
+  mutate(ups = factor(ups, levels = c("A", "BC"),
+                      labels = c("upsA", "non-upsA"))) %>% 
+  ggplot(aes(x = isolate, y = n, fill = ups)) +
+    geom_bar(stat = "identity", position = "fill") +
+    scale_fill_manual(values = c("upsA" = "#253494", "non-upsA" = "#A1DAB4"),
+                      name = "") +
+    scale_y_continuous(breaks = scales::pretty_breaks(n=10), 
+                       labels = scales::percent_format(accuracy = 1)) +
+    facet_grid(~country, scales = "free_x") + 
+    labs(x = "isolate",
+         y = "% types in isolate repertoire") +
+    theme_bw() +
+    theme(axis.text.x = element_blank())
+```
+
+### Inheritance of DBL$a$ types in the recombinant *var*codes
+
+```{r}
+# proportion inherited by ups
+upsA_outbreak <- 5
+upsBC_outbreak <- 42
+
+outbreak_types <- vc1_data %>% mutate(outbreak_type = "outbreak_type") %>% select(DBLa_type, outbreak_type)
+```
+
+For the outbreak *var*code1, its 47 DBL$a$ types were classified as 5 upsA and 42 non-upsA. In Figure \@ref(fig:prop-inherited-outbreak) we look specifically at the "inheritance" of upsA (blues) vs non-upsA (greens) types from the parental outbreak *varc*ode1 in the case of the parasites with recombinant *var*codes (*var*codes3,4,6,7). This provides a proxy to examine inheritance of types with regards to their chromosomal location. The proportion of the outbreak types that were inherited in the recombinant parasite *var*codes is indicated in the darker shades of blue or green, showing that the proportion of inherited types varied both by *var*code and upsA/non-upsA. Overall, the DBL$a$ type sharing patterns in parasites with recombinant varcodes are consistent with inheritance of 50% types, with a higher proportion of non-upsA inherited types (\~40-70%, i.e. 17 to 30 of the 42 types) vs upsA (\~20-50%, i.e. 1 to 3 of the 5 upsA types). The exception was *var*code7 where 60-80% of upsA were inherited, i.e. 3-4 of the 5 upsA types. The lighter shades correspond to those types that were not inherited from the outbreak clone but from the other parent.
+
+```{r prop-inherited-outbreak, fig.cap="The proportion of the outbreak types that were inherited in the recombinant parasite varcodes is indicated in the darker shades of blue or green.  The proportion of the outbreak types that were inherited in the recombinant parasite varcodes is indicated in the darker shades of blue or green and the lighter shades correspond to those types that were not inherited from the outbreak clone but from the other parent."}
+ecu_data %>% 
+  select(DBLa_type, ups, starts_with("ECPf")) %>% 
+  pivot_longer(-c(DBLa_type, ups), names_to = "SampleID", values_to = "presence") %>% 
+  left_join(epi %>% select(SampleID, id, varcode, Case, OutbreakRecombinant), by = "SampleID") %>% 
+  left_join(outbreak_types, by = "DBLa_type") %>% 
+  filter(OutbreakRecombinant == "OutbreakVarcode" | OutbreakRecombinant == "OutbreakRecombinant") %>% 
+  group_by(ups, presence, varcode, SampleID, Case, id, outbreak_type) %>% 
+  tally() %>% 
+  filter(presence == 1, varcode != "varcode1") %>% 
+  mutate(ups = factor(ups, levels = c("A", "BC"),
+                      labels = c("upsA", "non-upsA"))) %>% 
+  mutate(outbreak_type = replace_na(outbreak_type, "other_type")) %>% 
+  ggplot(aes(x = reorder(Case, id), y = n, fill = ups)) +
+    geom_bar(aes(alpha = outbreak_type),
+             stat = "identity", position = "fill") +
+    scale_fill_manual(values = c("upsA" = "#253494", "non-upsA" = "#A1DAB4"),
+                      name = "") +
+    scale_alpha_manual(values = c(0.4, 1),
+                       labels = c("not inherited", "inherited"),
+                       name = "") +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10),
+                       labels = scales::percent_format(1)) +
+    labs(x = "Case",
+         y = "% types inherited from outbreak varcode1") +
+    facet_grid(ups~varcode, scales = "free_x") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### References
